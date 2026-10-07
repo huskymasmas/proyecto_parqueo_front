@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Parqueo Inteligente UMG</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="login-body">
+
+    <div class="umg-login-screen">
+
+        <div class="umg-login-container">
+
+            <div class="umg-header">
+
+                <h2>🅿 Parqueo Inteligente - UMG</h2>
+
+                <p>
+                    Seleccione su método de acceso al sistema
+                </p>
+
+            </div>
+
+
+            <!-- ===================================================== -->
+            <!-- SELECCIÓN DEL TIPO DE ACCESO -->
+            <!-- ===================================================== -->
+
+            <div class="umg-cards-grid">
+
+                <!-- CLIENTE -->
+                <div class="umg-card"
+                     onclick="mostrarSeccion('cliente')">
+
+                    <div class="umg-card-icon">
+                        🚗
+                    </div>
+
+                    <div class="umg-card-content">
+
+                        <h3>Cliente / TAG</h3>
+
+                        <p>
+                            Consulte su espacio asignado,
+                            tiempo y pagos mediante placa vehicular.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- PERSONAL -->
+                <div class="umg-card"
+                     onclick="mostrarSeccion('admin')">
+
+                    <div class="umg-card-icon">
+                        ⚙️
+                    </div>
+
+                    <div class="umg-card-content">
+
+                        <h3>Personal Interno</h3>
+
+                        <p>
+                            Acceso para Administradores,
+                            Operadores y Auditores del sistema.
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- ===================================================== -->
+            <!-- FORMULARIO CLIENTE -->
+            <!-- ===================================================== -->
+
+            <div id="form-cliente-box"
+                 class="sub-form-container"
+                 style="display: none;">
+
+                <h3>Consulta de Conductor</h3>
+
+
+                <form onsubmit="ingresarComoCliente(event)">
+
+                    <div class="form-group">
+
+                        <label>
+                            Ingrese su Placa (Ej: ABC123):
+                        </label>
+
+                        <!--
+                            IMPORTANTE:
+
+                            No se utiliza pattern aquí porque la placa
+                            posteriormente será validada por el Backend
+                            contra la tabla de vehículos de la BD.
+
+                            El frontend solamente captura la placa.
+                        -->
+
+                        <input
+                            type="text"
+                            id="inputPlacaLogin"
+                            placeholder="ABC123"
+                            maxlength="10"
+                            required
+                            autocomplete="off"
+                            style="text-transform: uppercase;"
+                        >
+
+                    </div>
+
+
+                    <button type="submit"
+                            class="btn-primary">
+
+                        Consultar Mi Estado
+
+                    </button>
+
+
+                    <button type="button"
+                            class="btn-secondary"
+                            onclick="ocultarSubForms()">
+
+                        Volver
+
+                    </button>
+
+                </form>
+
+            </div>
+
+
+            <!-- ===================================================== -->
+            <!-- FORMULARIO PERSONAL INTERNO -->
+            <!-- ===================================================== -->
+
+            <div id="form-admin-box"
+                 class="sub-form-container"
+                 style="display: none;">
+
+                <h3>
+                    Iniciar Sesión - Personal
+                </h3>
+
+
+                <form onsubmit="ingresarComoAdmin(event)">
+
+                    <div class="form-group">
+
+                        <label>
+                            Usuario (username):
+                        </label>
+
+                        <input
+                            type="text"
+                            id="inputUserAdmin"
+                            placeholder="admin u operador1"
+                            required
+                        >
+
+                    </div>
+
+
+                    <div class="form-group">
+
+                        <label>
+                            Contraseña:
+                        </label>
+
+                        <input
+                            type="password"
+                            id="inputPassAdmin"
+                            placeholder="********"
+                            required
+                        >
+
+                    </div>
+
+
+                    <button type="submit"
+                            class="btn-primary">
+
+                        Entrar al Panel
+
+                    </button>
+
+
+                    <button type="button"
+                            class="btn-secondary"
+                            onclick="ocultarSubForms()">
+
+                        Volver
+
+                    </button>
+
+                </form>
+
+            </div>
+
+
+            <!-- ===================================================== -->
+            <!-- PIE -->
+            <!-- ===================================================== -->
+
+            <div class="umg-footer">
+
+                <span>
+                    © 2026 Arquitectura II
+                </span>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <script>
+
+        // ============================================================
+        // MOSTRAR FORMULARIO SELECCIONADO
+        // ============================================================
+
+        function mostrarSeccion(tipo) {
+
+            document.querySelector(
+                '.umg-cards-grid'
+            ).style.display = 'none';
+
+
+            if (tipo === 'cliente') {
+
+                document.getElementById(
+                    'form-cliente-box'
+                ).style.display = 'block';
+
+
+                document.getElementById(
+                    'form-admin-box'
+                ).style.display = 'none';
+
+            }
+
+            else {
+
+                document.getElementById(
+                    'form-admin-box'
+                ).style.display = 'block';
+
+
+                document.getElementById(
+                    'form-cliente-box'
+                ).style.display = 'none';
+
+            }
+
+        }
+
+
+        // ============================================================
+        // VOLVER A LA SELECCIÓN
+        // ============================================================
+
+        function ocultarSubForms() {
+
+            document.querySelector(
+                '.umg-cards-grid'
+            ).style.display = 'grid';
+
+
+            document.getElementById(
+                'form-cliente-box'
+            ).style.display = 'none';
+
+
+            document.getElementById(
+                'form-admin-box'
+            ).style.display = 'none';
+
+        }
+
+
+        // ============================================================
+        // INGRESAR COMO CLIENTE
+        // ============================================================
+        //
+        // Por ahora el acceso del cliente se simula utilizando
+        // sessionStorage.
+        //
+        // API BACKEND:
+        //
+        // Cuando el Backend esté conectado, aquí se puede consultar:
+        //
+        // GET /api/vehiculos/placa/{placa}
+        //
+        // o el endpoint que defina el compañero encargado del Backend.
+        //
+        // El Backend deberá comprobar que la placa exista en la BD.
+        // ============================================================
+
+        function ingresarComoCliente(e) {
+
+            e.preventDefault();
+
+
+            const placa = document
+                .getElementById('inputPlacaLogin')
+                .value
+                .trim()
+                .toUpperCase();
+
+
+            if (!placa) {
+
+                alert(
+                    'Ingrese una placa.'
+                );
+
+                return;
+
+            }
+
+
+            // ========================================================
+            // API BACKEND
+            // ========================================================
+            //
+            // FUTURO:
+            //
+            // Aquí se enviará o consultará la placa en el Backend.
+            //
+            // Ejemplo conceptual:
+            //
+            // fetch(`${API_BASE}/vehiculos/placa/${placa}`)
+            //
+            // Si el vehículo existe, se permitirá consultar
+            // su registro activo.
+            //
+            // ========================================================
+
+
+            // ========================================================
+            // SIMULACIÓN TEMPORAL
+            // ========================================================
+
+            sessionStorage.setItem(
+                'usuarioLogueado',
+                JSON.stringify({
+                    tipo: 'CLIENTE',
+                    placa: placa
+                })
+            );
+
+
+            window.location.href =
+                'index.html';
+
+        }
+
+
+        // ============================================================
+        // INGRESAR COMO PERSONAL
+        // ============================================================
+        //
+        // Actualmente este login también es una simulación.
+        //
+        // API BACKEND:
+        //
+        // POST /api/login
+        //
+        // El Backend deberá validar username y password_hash
+        // utilizando la tabla usuarios.
+        //
+        // ============================================================
+
+        function ingresarComoAdmin(e) {
+
+            e.preventDefault();
+
+
+            const user = document
+                .getElementById('inputUserAdmin')
+                .value
+                .trim();
+
+
+            const password = document
+                .getElementById('inputPassAdmin')
+                .value;
+
+
+            // ========================================================
+            // API BACKEND
+            // ========================================================
+            //
+            // FUTURO:
+            //
+            // Aquí se enviarán:
+            //
+            // {
+            //     username: user,
+            //     password: password
+            // }
+            //
+            // El Backend deberá devolver el usuario y su rol.
+            //
+            // ========================================================
+
+
+            // ========================================================
+            // SIMULACIÓN TEMPORAL
+            // ========================================================
+
+            sessionStorage.setItem(
+                'usuarioLogueado',
+                JSON.stringify({
+                    tipo: 'ADMIN',
+                    username: user
+                })
+            );
+
+
+            window.location.href =
+                'index.html';
+
+        }
+
+    </script>
+
+</body>
+</html>
