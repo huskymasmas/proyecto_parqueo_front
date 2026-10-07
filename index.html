@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Control - Parqueo Inteligente UMG</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-wrapper">
+        <main class="container">
+
+            <header class="main-header">
+                <div class="header-title-left">
+                    <button onclick="cerrarSesion()" class="btn-volver">
+                        ← Cerrar Sesión
+                    </button>
+
+                    <h1>🅿 Panel Principal - Parqueo Inteligente UMG</h1>
+                </div>
+
+                <div class="role-badge-display">
+                    <span id="label-rol-activo" class="badge-rol">
+                        Cargando...
+                    </span>
+                </div>
+            </header>
+
+
+            <!-- ===================================================== -->
+            <!-- VISTA ADMINISTRADOR -->
+            <!-- ===================================================== -->
+
+            <section id="vista-admin"
+                     class="view-section"
+                     style="display: none;">
+
+                <!-- PESTAÑAS -->
+                <div class="admin-tabs">
+
+                    <button onclick="cambiarSubpestana('operacion')"
+                            id="btn-tab-op"
+                            class="tab-btn active">
+                        🗺️ Mapa y Operación
+                    </button>
+
+                    <button onclick="cambiarSubpestana('historial')"
+                            id="btn-tab-hist"
+                            class="tab-btn">
+                        📋 Historial de Accesos
+                    </button>
+
+                    <button onclick="cambiarSubpestana('alarmas')"
+                            id="btn-tab-alrt"
+                            class="tab-btn">
+                        🚨 Centro de Alarmas
+                        <span id="badge-count-alarmas"
+                              class="badge-alert-count">
+                            1
+                        </span>
+                    </button>
+
+                    <button onclick="cambiarSubpestana('usuarios')"
+                            id="btn-tab-users"
+                            class="tab-btn">
+                        👥 Usuarios
+                    </button>
+
+                    <!-- NUEVA PESTAÑA -->
+                    <button onclick="cambiarSubpestana('vehiculos')"
+                            id="btn-tab-vehiculos"
+                            class="tab-btn">
+                        🚗 Vehículos
+                    </button>
+
+                </div>
+
+
+                <!-- ================================================= -->
+                <!-- PESTAÑA MAPA Y OPERACIÓN -->
+                <!-- ================================================= -->
+
+                <div id="sub-operacion"
+                     class="admin-subview">
+
+                    <h2>Monitoreo en Tiempo Real</h2>
+
+                    <div class="talanqueras-banner">
+
+                        <div class="talanquera-card">
+                            <span>Talanquera de Entrada:</span>
+
+                            <span id="estado-t-entrada"
+                                  class="badge cerrada">
+                                CERRADA
+                            </span>
+                        </div>
+
+                        <div class="talanquera-card">
+                            <span>Talanquera de Salida:</span>
+
+                            <span id="estado-t-salida"
+                                  class="badge cerrada">
+                                CERRADA
+                            </span>
+                        </div>
+
+                    </div>
+
+
+                    <div class="admin-grid-layout">
+
+                        <!-- MAPA -->
+                        <div class="card map-card">
+
+                            <h3>🗺️ Mapa General (Maqueta Real)</h3>
+
+                            <div class="maqueta-foto-container">
+
+                                <img src="maqueta-limpia.svg"
+                                     alt="Arquitectura Parqueo"
+                                     class="img-maqueta">
+
+                                <div class="space-overlay libre" id="slot-E1">
+                                    <strong>E1</strong><br>
+                                    <small>Libre</small>
+                                </div>
+
+                                <div class="space-overlay libre" id="slot-E2">
+                                    <strong>E2</strong><br>
+                                    <small>Libre</small>
+                                </div>
+
+                                <div class="space-overlay reservado" id="slot-E3">
+                                    <strong>E3</strong><br>
+                                    <small>ABC123</small>
+                                </div>
+
+                                <div class="space-overlay libre" id="slot-E4">
+                                    <strong>E4</strong><br>
+                                    <small>Libre</small>
+                                </div>
+
+                                <div class="space-overlay libre" id="slot-E5">
+                                    <strong>E5</strong><br>
+                                    <small>Libre</small>
+                                </div>
+
+                                <div class="space-overlay libre" id="slot-E6">
+                                    <strong>E6</strong><br>
+                                    <small>Libre</small>
+                                </div>
+
+                                <div class="space-overlay libre" id="slot-E7">
+                                    <strong>E7</strong><br>
+                                    <small>Libre</small>
+                                </div>
+
+                            </div>
+                        </div>
+
+
+                        <!-- VEHÍCULOS ACTIVOS -->
+                        <div class="card">
+
+                            <h3>🚗 Vehículos Activos</h3>
+
+                            <div class="table-container">
+
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Placa</th>
+                                            <th>Tipo</th>
+                                            <th>Espacio</th>
+                                            <th>Pago</th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody id="tablaClientesAdmin">
+                                    </tbody>
+                                </table>
+
+                            </div>
+                        </div>
+
+                    </div>
+
+
+                    <!-- REGISTRO MANUAL DE INGRESO -->
+                    <div class="card mt-20">
+
+                        <h3>⚙️ Registro Manual de Ingreso</h3>
+
+                        <form id="formAdminRegistro"
+                              class="inline-form">
+
+                            <div class="form-group">
+
+                                <label>Categoría:</label>
+
+                                <select id="tipoVehiculo">
+
+                                    <option value="COMPACTO">
+                                        Compacto (E1, E2)
+                                    </option>
+
+                                    <option value="RESERVADO">
+                                        Reservado (E3)
+                                    </option>
+
+                                    <option value="GRANDE">
+                                        Grande (E4)
+                                    </option>
+
+                                    <option value="CARGA">
+                                        Carga (E5)
+                                    </option>
+
+                                    <option value="MOTO">
+                                        Moto (E6, E7)
+                                    </option>
+
+                                </select>
+
+                            </div>
+
+
+                            <div class="form-group">
+
+                                <label>Placa:</label>
+
+                                <input type="text"
+                                       id="placaAdmin"
+                                       pattern="[A-Z]{3}[0-9]{3}"
+                                       placeholder="ABC123"
+                                       required
+                                       style="text-transform: uppercase;">
+
+                            </div>
+
+
+                            <button type="submit"
+                                    class="btn-primary">
+                                Registrar Ingreso
+                            </button>
+
+                        </form>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ================================================= -->
+                <!-- PESTAÑA HISTORIAL -->
+                <!-- ================================================= -->
+
+                <div id="sub-historial"
+                     class="admin-subview"
+                     style="display: none;">
+
+                    <h2>📋 Historial de Accesos y Cobros</h2>
+
+                    <div class="card mt-20">
+
+                        <div class="table-container">
+
+                            <table>
+
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Placa</th>
+                                        <th>Espacio</th>
+                                        <th>Entrada</th>
+                                        <th>Salida</th>
+                                        <th>Estado</th>
+                                        <th>Monto</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody id="tablaHistorialBD">
+                                </tbody>
+
+                            </table>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ================================================= -->
+                <!-- PESTAÑA ALARMAS -->
+                <!-- ================================================= -->
+
+                <div id="sub-alarmas"
+                     class="admin-subview"
+                     style="display: none;">
+
+                    <h2>🚨 Centro de Monitoreo de Alarmas</h2>
+
+                    <div class="card mt-20">
+
+                        <div class="table-container">
+
+                            <table>
+
+                                <thead>
+                                    <tr>
+                                        <th>Tipo</th>
+                                        <th>Nivel</th>
+                                        <th>Espacio</th>
+                                        <th>Descripción</th>
+                                        <th>Acción</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody id="tablaAlarmasBD">
+                                </tbody>
+
+                            </table>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ================================================= -->
+                <!-- PESTAÑA USUARIOS -->
+                <!-- ================================================= -->
+
+                <div id="sub-usuarios"
+                     class="admin-subview"
+                     style="display: none;">
+
+                    <h2>👥 Administración de Usuarios</h2>
+
+
+                    <div class="card mt-20">
+
+                        <h3>➕ Agregar Nuevo Usuario</h3>
+
+                        <form id="formNuevoUsuario"
+                              class="inline-form">
+
+                            <div class="form-group">
+                                <label>Username:</label>
+
+                                <input type="text"
+                                       id="nuevoUsername"
+                                       required>
+                            </div>
+
+
+                            <div class="form-group">
+                                <label>Email:</label>
+
+                                <input type="email"
+                                       id="nuevoEmail"
+                                       required>
+                            </div>
+
+
+                            <div class="form-group">
+                                <label>Nombre completo:</label>
+
+                                <input type="text"
+                                       id="nuevoNombreCompleto"
+                                       required>
+                            </div>
+
+
+                            <div class="form-group">
+                                <label>Contraseña:</label>
+
+                                <input type="password"
+                                       id="nuevoPassword"
+                                       required>
+                            </div>
+
+
+                            <div class="form-group">
+                                <label>Rol:</label>
+
+                                <select id="nuevoRol" required>
+
+                                    <option value="ADMIN">
+                                        ADMIN
+                                    </option>
+
+                                    <option value="OPERADOR">
+                                        OPERADOR
+                                    </option>
+
+                                    <option value="AUDITOR">
+                                        AUDITOR
+                                    </option>
+
+                                </select>
+                            </div>
+
+
+                            <div class="form-group">
+                                <label>Estado:</label>
+
+                                <select id="nuevoActivo" required>
+
+                                    <option value="true">
+                                        Activo
+                                    </option>
+
+                                    <option value="false">
+                                        Inactivo
+                                    </option>
+
+                                </select>
+                            </div>
+
+
+                            <button type="submit"
+                                    class="btn-primary">
+                                Guardar Usuario
+                            </button>
+
+                        </form>
+
+
+                        <p id="msgNuevoUsuario"
+                           class="msg-alerta">
+                        </p>
+
+                    </div>
+
+
+                    <div class="card mt-20">
+
+                        <h3>👤 Usuarios Registrados</h3>
+
+                        <div class="table-container">
+
+                            <table>
+
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Username</th>
+                                        <th>Email</th>
+                                        <th>Nombre</th>
+                                        <th>Rol</th>
+                                        <th>Activo</th>
+                                        <th>Fecha Creación</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody id="tablaUsuariosAdmin">
+                                </tbody>
+
+                            </table>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ================================================= -->
+                <!-- NUEVA PESTAÑA VEHÍCULOS -->
+                <!-- ================================================= -->
+
+                <div id="sub-vehiculos"
+                     class="admin-subview"
+                     style="display: none;">
+
+                    <h2>🚗 Administración de Vehículos</h2>
+
+
+                    <!-- AGREGAR VEHÍCULO -->
+                    <div class="card mt-20">
+
+                        <h3>➕ Agregar Nuevo Vehículo</h3>
+
+                        <form id="formNuevoVehiculo"
+                              class="inline-form">
+
+
+                            <div class="form-group">
+
+                                <label>Placa:</label>
+
+                                <input type="text"
+                                       id="nuevaPlacaVehiculo"
+                                       pattern="[A-Z]{3}[0-9]{3}"
+                                       placeholder="ABC123"
+                                       maxlength="6"
+                                       required
+                                       style="text-transform: uppercase;">
+
+                            </div>
+
+
+                            <div class="form-group">
+
+                                <label>Tipo de vehículo:</label>
+
+                                <select id="nuevoTipoVehiculo"
+                                        required>
+
+                                    <option value="COMPACTO">
+                                        Compacto
+                                    </option>
+
+                                    <option value="GRANDE">
+                                        Grande
+                                    </option>
+
+                                    <option value="MOTO">
+                                        Moto
+                                    </option>
+
+                                    <option value="RESERVA">
+                                        Reserva
+                                    </option>
+
+                                    <option value="CARGA">
+                                        Carga
+                                    </option>
+
+                                </select>
+
+                            </div>
+
+
+                            <div class="form-group">
+
+                                <label>Propietario:</label>
+
+                                <input type="text"
+                                       id="nuevoPropietarioVehiculo"
+                                       placeholder="Nombre del propietario"
+                                       required>
+
+                            </div>
+
+
+                            <div class="form-group">
+
+                                <label>Teléfono:</label>
+
+                                <input type="text"
+                                       id="nuevoTelefonoVehiculo"
+                                       placeholder="55555555"
+                                       required>
+
+                            </div>
+
+
+                            <button type="submit"
+                                    class="btn-primary">
+
+                                Guardar Vehículo
+
+                            </button>
+
+                        </form>
+
+
+                        <p id="msgNuevoVehiculo"
+                           class="msg-alerta">
+                        </p>
+
+                    </div>
+
+
+                    <!-- LISTADO DE VEHÍCULOS -->
+                    <div class="card mt-20">
+
+                        <h3>🚘 Vehículos Registrados</h3>
+
+                        <div class="table-container">
+
+                            <table>
+
+                                <thead>
+
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Placa</th>
+                                        <th>Tipo</th>
+                                        <th>Propietario</th>
+                                        <th>Teléfono</th>
+                                        <th>Fecha Registro</th>
+                                    </tr>
+
+                                </thead>
+
+
+                                <tbody id="tablaVehiculosAdmin">
+                                </tbody>
+
+                            </table>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <!-- ===================================================== -->
+            <!-- VISTA CLIENTE -->
+            <!-- ===================================================== -->
+
+            <section id="vista-cliente"
+                     class="view-section"
+                     style="display: none;">
+
+                <h2>Portal de Conductor / TAG</h2>
+
+
+                <div class="card dashboard-card">
+
+                    <div class="dashboard-header">
+
+                        <h3>
+                            🚗 Estado del Vehículo:
+                            <span id="lblPlaca">
+                                ABC123
+                            </span>
+                        </h3>
+
+                    </div>
+
+
+                    <div class="info-grid">
+
+                        <div class="info-item">
+
+                            <span class="label">
+                                Espacio Asignado:
+                            </span>
+
+                            <span class="value"
+                                  id="lblEspacio">
+                                E3
+                            </span>
+
+                        </div>
+
+
+                        <div class="info-item">
+
+                            <span class="label">
+                                Hora de Entrada:
+                            </span>
+
+                            <span class="value"
+                                  id="lblEntrada">
+                                14:30 hrs
+                            </span>
+
+                        </div>
+
+
+                        <div class="info-item">
+
+                            <span class="label">
+                                Tiempo:
+                            </span>
+
+                            <span class="value"
+                                  id="lblTiempo">
+                                1 hora 15 minutos
+                            </span>
+
+                        </div>
+
+
+                        <div class="info-item">
+
+                            <span class="label">
+                                Estado de Pago:
+                            </span>
+
+                            <span class="value"
+                                  id="lblEstadoPago">
+
+                                <span class="badge pend">
+                                    Pendiente
+                                </span>
+
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="action-zone mt-20">
+
+                        <button id="btnPagar"
+                                class="btn-success"
+                                onclick="simularPago()">
+
+                            Realizar Pago
+
+                        </button>
+
+
+                        <p id="lblResultadoSalida"
+                           class="msg-alerta">
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+        </main>
+    </div>
+
+
+    <script src="script.js"></script>
+
+</body>
+</html>

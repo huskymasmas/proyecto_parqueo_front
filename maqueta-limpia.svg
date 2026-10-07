@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Fondo general del parqueo (Asfalto oscuro) -->
+  <rect width="800" height="600" fill="#18181b"/>
+  
+  <!-- Borde exterior de la maqueta -->
+  <rect x="20" y="20" width="760" height="560" fill="none" stroke="#52525b" stroke-width="4" rx="10"/>
+  
+  <!-- Área de circuitería y protoboard (abajo a la izquierda según tu foto) -->
+  <rect x="35" y="300" width="130" height="260" fill="#202023" stroke="#3f3f46" stroke-width="2" rx="4"/>
+  <text x="50" y="325" fill="#71717a" font-size="12" font-family="sans-serif">Zona Electrónica</text>
+
+  <!-- ================= MARCOS DE LOS 7 ESPACIOS (Distribución Real) ================= -->
+
+  <!-- 1 y 2: Bloque izquierdo (E1 abajo, E2 arriba) -->
+  <rect x="60" y="200" width="110" height="90" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="110" y="250" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E2</text>
+
+  <rect x="60" y="90" width="110" height="90" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="110" y="140" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E1</text>
+
+  <!-- 3: Espacio superior central (E3 horizontal) -->
+  <rect x="360" y="60" width="110" height="80" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="415" y="105" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E3</text>
+
+  <!-- 4: Espacio superior derecho (E4 horizontal) -->
+  <rect x="610" y="60" width="130" height="70" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="675" y="100" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E4</text>
+
+  <!-- 5: Espacio lateral derecho (E5 vertical) -->
+  <rect x="650" y="220" width="90" height="150" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="695" y="300" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E5</text>
+
+  <!-- 6 y 7: Bloque central inferior (E6 arriba, E7 abajo) -->
+  <rect x="410" y="220" width="100" height="90" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="460" y="270" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E6</text>
+
+  <rect x="410" y="320" width="100" height="90" rx="4" fill="#27272a" stroke="#52525b" stroke-width="2"/>
+  <text x="460" y="370" fill="#71717a" font-size="14" font-family="sans-serif" text-anchor="middle">E7</text>
+
+</svg>
