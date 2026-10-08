@@ -31,22 +31,14 @@ const datosParqueoIniciales = {
         },
 
         "E3": {
-            categoria: "RESERVADO",
-            estado: "OCUPADO",
-            placa: "ABC123",
-            horaEntrada: "14:30 hrs",
-            pagado: false
-        },
-
-        "E4": {
-            categoria: "GRANDE",
+            categoria: "MANUAL",
             estado: "LIBRE",
             placa: null,
             horaEntrada: null,
             pagado: false
         },
 
-        "E5": {
+        "E4": {
             categoria: "CARGA",
             estado: "LIBRE",
             placa: null,
@@ -54,8 +46,16 @@ const datosParqueoIniciales = {
             pagado: false
         },
 
+        "E5": {
+            categoria: "RESERVADO",
+            estado: "OCUPADO",
+            placa: "ABC123",
+            horaEntrada: "14:30 hrs",
+            pagado: false
+        },
+
         "E6": {
-            categoria: "MOTO",
+            categoria: "GRANDE",
             estado: "LIBRE",
             placa: null,
             horaEntrada: null,
@@ -94,7 +94,7 @@ const datosParqueoIniciales = {
             id: 1,
             tipo: "TIEMPO_EXCEDIDO",
             nivel: "ADVERTENCIA",
-            espacio: "E3",
+            espacio: "E5",
             descripcion:
                 "Vehículo ABC123 superó las 2 horas continuas.",
             atendida: false
@@ -212,6 +212,17 @@ function cargarEstado() {
             datosParqueo =
                 JSON.parse(guardado);
 
+            // Actualizar categorías sin borrar vehículos ni pagos guardados.
+            const categoriasActuales = {
+                E1: "COMPACTO", E2: "COMPACTO", E3: "MANUAL",
+                E4: "CARGA", E5: "RESERVADO", E6: "GRANDE", E7: "MOTO"
+            };
+            for (const [codigo, categoria] of Object.entries(categoriasActuales)) {
+                if (datosParqueo.espacios[codigo]) {
+                    datosParqueo.espacios[codigo].categoria = categoria;
+                }
+            }
+            guardarEstado();
             return;
 
         } catch (error) {
@@ -618,12 +629,12 @@ function actualizarInterfazAdmin() {
     const coordenadasMap = {
 
         "E1": {
-            top: "23.5%",
+            top: "39.5%",
             left: "14%"
         },
 
         "E2": {
-            top: "39.5%",
+            top: "23.5%",
             left: "14%"
         },
 
@@ -1097,12 +1108,6 @@ if (formAdminRegistro) {
                     &&
                     (
                         esp.categoria === tipoSeleccionado
-                        ||
-                        (
-                            tipoSeleccionado === "RESERVADO"
-                            &&
-                            codigo === "E3"
-                        )
                     )
                 ) {
 
@@ -1117,32 +1122,10 @@ if (formAdminRegistro) {
 
 
             // ==========================================================
-            // SI NO ENCUENTRA DE ESA CATEGORÍA
-            // BUSCAR CUALQUIER ESPACIO LIBRE
+            // NO ASIGNAR OTRA CATEGORÍA AUTOMÁTICAMENTE
+            // E3 SE UTILIZA SOLAMENTE CON LA OPCIÓN MANUAL
             // ==========================================================
 
-            if (!espacioEncontrado) {
-
-                for (
-                    const codigo in datosParqueo.espacios
-                ) {
-
-                    if (
-                        datosParqueo
-                            .espacios[codigo]
-                            .estado === "LIBRE"
-                    ) {
-
-                        espacioEncontrado =
-                            codigo;
-
-                        break;
-
-                    }
-
-                }
-
-            }
 
 
             if (!espacioEncontrado) {
