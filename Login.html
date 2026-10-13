@@ -5,11 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Parqueo Inteligente UMG</title>
     <link rel="stylesheet" href="style.css">
+    <script src="config.js"></script>
 </head>
 
 <body class="login-body">
 
     <div class="umg-login-screen">
+
+        <!-- Botón flotante de cambio de tema en la esquina superior derecha -->
+        <div style="position: absolute; top: 20px; right: 20px; z-index: 1000;">
+            <button onclick="toggleDarkMode()" class="btn-theme-toggle">🌓 Tema</button>
+        </div>
 
         <div class="umg-login-container">
 
@@ -92,23 +98,13 @@
                     <div class="form-group">
 
                         <label>
-                            Ingrese su Placa (Ej: ABC123):
+                            Ingrese la placa asignada a su TAG (Ej: P101CMP):
                         </label>
-
-                        <!--
-                            IMPORTANTE:
-
-                            No se utiliza pattern aquí porque la placa
-                            posteriormente será validada por el Backend
-                            contra la tabla de vehículos de la BD.
-
-                            El frontend solamente captura la placa.
-                        -->
 
                         <input
                             type="text"
                             id="inputPlacaLogin"
-                            placeholder="ABC123"
+                            placeholder="P101CMP"
                             maxlength="10"
                             required
                             autocomplete="off"
@@ -118,7 +114,13 @@
                     </div>
 
 
+                    <p id="msgLoginCliente"
+                       class="msg-alerta"
+                       role="alert"
+                       style="color:#dc2626;min-height:1.2em;"></p>
+
                     <button type="submit"
+                            id="btnLoginCliente"
                             class="btn-primary">
 
                         Consultar Mi Estado
@@ -292,22 +294,8 @@
         // ============================================================
         // INGRESAR COMO CLIENTE
         // ============================================================
-        //
-        // Por ahora el acceso del cliente se simula utilizando
-        // sessionStorage.
-        //
-        // API BACKEND:
-        //
-        // Cuando el Backend esté conectado, aquí se puede consultar:
-        //
-        // GET /api/vehiculos/placa/{placa}
-        //
-        // o el endpoint que defina el compañero encargado del Backend.
-        //
-        // El Backend deberá comprobar que la placa exista en la BD.
-        // ============================================================
 
-        function ingresarComoCliente(e) {
+        async function ingresarComoCliente(e) {
 
             e.preventDefault();
 
@@ -318,68 +306,78 @@
                 .trim()
                 .toUpperCase();
 
+            const msg = document.getElementById('msgLoginCliente');
+            const boton = document.getElementById('btnLoginCliente');
+
 
             if (!placa) {
 
-                alert(
-                    'Ingrese una placa.'
-                );
+                msg.innerText = 'Ingrese una placa.';
 
                 return;
 
             }
 
 
-            // ========================================================
-            // API BACKEND
-            // ========================================================
-            //
-            // FUTURO:
-            //
-            // Aquí se enviará o consultará la placa en el Backend.
-            //
-            // Ejemplo conceptual:
-            //
-            // fetch(`${API_BASE}/vehiculos/placa/${placa}`)
-            //
-            // Si el vehículo existe, se permitirá consultar
-            // su registro activo.
-            //
-            // ========================================================
+            msg.innerText = '';
+            boton.disabled = true;
+            boton.innerText = 'Verificando...';
 
 
-            // ========================================================
-            // SIMULACIÓN TEMPORAL
-            // ========================================================
+            try {
 
-            sessionStorage.setItem(
-                'usuarioLogueado',
-                JSON.stringify({
-                    tipo: 'CLIENTE',
-                    placa: placa
-                })
-            );
+                // API: GET /api/espacios/ocupados
+                // Solo entra quien está dentro del parqueo en este momento.
+                const ocupados = await consultarOcupados();
+
+                const dentro = ocupados.some(
+                    o => String(o.placa).toUpperCase() === placa
+                );
 
 
-            window.location.href =
-                'index.html';
+                if (!dentro) {
+
+                    msg.innerText =
+                        'El vehículo ' + placa +
+                        ' no se encuentra en el parqueo.';
+
+                    return;
+
+                }
+
+
+                sessionStorage.setItem(
+                    'usuarioLogueado',
+                    JSON.stringify({
+                        tipo: 'CLIENTE',
+                        placa: placa
+                    })
+                );
+
+
+                window.location.href =
+                    'index.html';
+
+            }
+
+            catch (error) {
+
+                msg.innerText = error.message;
+
+            }
+
+            finally {
+
+                boton.disabled = false;
+                boton.innerText = 'Consultar Mi Estado';
+
+            }
 
         }
 
 
         // ============================================================
         // INGRESAR COMO PERSONAL
-        // ============================================================
-        //
-        // Actualmente este login también es una simulación.
-        //
-        // API BACKEND:
-        //
-        // POST /api/login
-        //
-        // El Backend deberá validar username y password_hash
-        // utilizando la tabla usuarios.
-        //
         // ============================================================
 
         function ingresarComoAdmin(e) {
@@ -396,29 +394,6 @@
             const password = document
                 .getElementById('inputPassAdmin')
                 .value;
-
-
-            // ========================================================
-            // API BACKEND
-            // ========================================================
-            //
-            // FUTURO:
-            //
-            // Aquí se enviarán:
-            //
-            // {
-            //     username: user,
-            //     password: password
-            // }
-            //
-            // El Backend deberá devolver el usuario y su rol.
-            //
-            // ========================================================
-
-
-            // ========================================================
-            // SIMULACIÓN TEMPORAL
-            // ========================================================
 
             sessionStorage.setItem(
                 'usuarioLogueado',

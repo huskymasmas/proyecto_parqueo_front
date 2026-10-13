@@ -26,14 +26,15 @@
 
                 </div>
 
-
-                <div class="role-badge-display">
-
-                    <span id="label-rol-activo"
-                          class="badge-rol">
-                        Cargando...
-                    </span>
-
+                <!-- Controles derechos con el botón de Tema integrado -->
+                <div class="header-right-controls" style="display: flex; align-items: center; gap: 12px;">
+                    <button onclick="toggleDarkMode()" class="btn-theme-toggle">🌓 Tema</button>
+                    <div class="role-badge-display">
+                        <span id="label-rol-activo"
+                              class="badge-rol">
+                            Cargando...
+                        </span>
+                    </div>
                 </div>
 
             </header>
@@ -341,15 +342,9 @@
                                     Placa:
                                 </label>
 
-                                <!--
-                                    La validación real de la placa
-                                    posteriormente se realizará
-                                    desde el Backend.
-                                -->
-
                                 <input type="text"
                                        id="placaAdmin"
-                                       placeholder="ABC123"
+                                       placeholder="P101CMP"
                                        maxlength="10"
                                        required
                                        autocomplete="off"
@@ -362,6 +357,44 @@
                                     class="btn-primary">
 
                                 Registrar Ingreso
+
+                            </button>
+
+                        </form>
+
+                    </div>
+
+                    <!-- ================================================= -->
+                    <!-- SALIDA MANUAL -->
+                    <!-- ================================================= -->
+
+                    <div class="card mt-20">
+
+                        <h3>
+                            🚪 Salida Manual
+                        </h3>
+
+
+                        <form id="formAdminSalida"
+                              class="inline-form">
+
+                            <div class="form-group">
+
+                                <label>
+                                    Vehículo dentro del parqueo:
+                                </label>
+
+                                <select id="placaSalidaAdmin">
+                                    <option value="">Cargando...</option>
+                                </select>
+
+                            </div>
+
+
+                            <button type="submit"
+                                    class="btn-primary">
+
+                                Dar Salida
 
                             </button>
 
@@ -679,17 +712,9 @@
                                     Placa:
                                 </label>
 
-                                <!--
-                                    Sin pattern rígido.
-
-                                    Posteriormente el Backend
-                                    validará la placa y comprobará
-                                    que no esté duplicada.
-                                -->
-
                                 <input type="text"
                                        id="nuevaPlacaVehiculo"
-                                       placeholder="ABC123"
+                                       placeholder="P101CMP"
                                        maxlength="10"
                                        required
                                        autocomplete="off"
@@ -707,6 +732,10 @@
 
                                 <select id="nuevoTipoVehiculo"
                                         required>
+
+                                    <option value="MANUAL">
+                                        Manual (TAG 3 / Cajón 3)
+                                    </option>
 
                                     <option value="COMPACTO">
                                         Compacto
@@ -741,8 +770,7 @@
 
                                 <input type="text"
                                        id="nuevoPropietarioVehiculo"
-                                       placeholder="Nombre del propietario"
-                                       required>
+                                       placeholder="Nombre del propietario (opcional)">
 
                             </div>
 
@@ -755,8 +783,7 @@
 
                                 <input type="text"
                                        id="nuevoTelefonoVehiculo"
-                                       placeholder="55555555"
-                                       required>
+                                       placeholder="55555555 (opcional)">
 
                             </div>
 
@@ -794,12 +821,12 @@
                                 <thead>
 
                                     <tr>
-                                        <th>ID</th>
+                                        <th>Tag #</th>
                                         <th>Placa</th>
                                         <th>Tipo</th>
-                                        <th>Propietario</th>
-                                        <th>Teléfono</th>
-                                        <th>Fecha Registro</th>
+                                        <th>UID RFID</th>
+                                        <th>Cajón</th>
+                                        <th>Estado</th>
                                     </tr>
 
                                 </thead>
@@ -921,7 +948,7 @@
 
                         <button id="btnPagar"
                                 class="btn-success"
-                                onclick="simularPago()">
+                                onclick="realizarPago()">
 
                             Realizar Pago
 
@@ -942,6 +969,7 @@
     </div>
 
 
+    <script src="config.js"></script>
     <script src="script.js"></script>
 
 </body>

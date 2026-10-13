@@ -1,411 +1,242 @@
 // ==========================================================================
-// DATOS TEMPORALES DEL PARQUEO
+// PARQUEO INTELIGENTE - UMG  |  LÓGICA DEL FRONT (conectada a la API)
 // ==========================================================================
-// Estos datos se utilizan solamente mientras el Backend todavía
-// no está conectado.
 //
-// Cuando existan las APIs, la información deberá venir de la BD.
+// Requiere config.js cargado ANTES (API_BASE, apiFetch, TAGS_RFID, esc, ...).
+//
+// ENDPOINTS QUE USA ESTE ARCHIVO
+//   GET  /api/espacios            -> mapa (7 cajones y su estado)
+//   GET  /api/espacios/ocupados   -> vehículos dentro / login del cliente
+//   GET  /api/historial           -> pestaña Historial
+//   POST /api/comando             -> autómata: REGISTRAR(placa, tipo) y
+//                                     REGISTRAR(placa, manual) -> esta última
+//                                     crea el vehículo Y deja la solicitud
+//                                     pendiente del cajón 3 en un solo paso
+//                                     (/api/manual/pendiente ya no existe)
+//   POST /api/rfid/comando        -> ASIGNAR(...)/SALIDA(...) desde "Registro
+//                                     Manual de Ingreso" y "Salida Manual"
+//   POST /api/pago/confirmar      -> botón "Realizar Pago" del cliente
+//
+// LO QUE SIGUE SIN API (queda local / demostración)
+//   - Alarmas (no hay endpoint de lectura)
+//   - Pestaña Usuarios (no hay tabla de usuarios en la BD nueva)
+//   - El login de personal (solo guarda el nombre en sessionStorage)
 // ==========================================================================
 
-const datosParqueoIniciales = {
 
-    talanqueraEntrada: "CERRADA",
-    talanqueraSalida: "CERRADA",
+// ==========================================================================
+// ESTADO EN MEMORIA (se llena con lo que responde la API)
+// ==========================================================================
 
-    espacios: {
-
-        "E1": {
-            categoria: "COMPACTO",
-            estado: "LIBRE",
-            placa: null,
-            horaEntrada: null,
-            pagado: false
-        },
-
-        "E2": {
-            categoria: "COMPACTO",
-            estado: "LIBRE",
-            placa: null,
-            horaEntrada: null,
-            pagado: false
-        },
-
-        "E3": {
-            categoria: "MANUAL",
-            estado: "LIBRE",
-            placa: null,
-            horaEntrada: null,
-            pagado: false
-        },
-
-        "E4": {
-            categoria: "CARGA",
-            estado: "LIBRE",
-            placa: null,
-            horaEntrada: null,
-            pagado: false
-        },
-
-        "E5": {
-            categoria: "RESERVADO",
-            estado: "OCUPADO",
-            placa: "ABC123",
-            horaEntrada: "14:30 hrs",
-            pagado: false
-        },
-
-        "E6": {
-            categoria: "GRANDE",
-            estado: "LIBRE",
-            placa: null,
-            horaEntrada: null,
-            pagado: false
-        },
-
-        "E7": {
-            categoria: "MOTO",
-            estado: "LIBRE",
-            placa: null,
-            horaEntrada: null,
-            pagado: false
-        }
-
-    },
-
-
-    historial: [
-
-        {
-            id: 2,
-            placa: "M456XYZ",
-            espacio: "E5",
-            entrada: "Hace 5 hrs",
-            salida: "Hace 3 hrs",
-            estado: "FINALIZADO",
-            monto: "15.00"
-        }
-
-    ],
-
-
-    alarmas: [
-
-        {
-            id: 1,
-            tipo: "TIEMPO_EXCEDIDO",
-            nivel: "ADVERTENCIA",
-            espacio: "E5",
-            descripcion:
-                "Vehículo ABC123 superó las 2 horas continuas.",
-            atendida: false
-        }
-
-    ]
-
+const CATEGORIAS = {
+    1: "COMPACTO", 2: "COMPACTO", 3: "MANUAL", 4: "CARGA",
+    5: "RESERVADO", 6: "GRANDE", 7: "MOTO"
 };
 
+function crearEstadoVacio() {
 
-let datosParqueo;
+    const espacios = {};
 
+    for (let n = 1; n <= 7; n++) {
+        espacios[`E${n}`] = {
+            categoria: CATEGORIAS[n],
+            estado: "LIBRE",
+            placa: null,
+            horaEntrada: null,
+            pagado: false,
+            fantasma: false     // OCUPADO en la BD pero sin registro activo
+        };
+    }
+
+    return {
+        talanqueraEntrada: "CERRADA",
+        talanqueraSalida: "CERRADA",
+        espacios: espacios,
+        historial: [],
+        alarmas: []        // sin endpoint de lectura: se deja como estaba
+    };
+
+}
+
+let datosParqueo = crearEstadoVacio();
+let ocupadosActuales = [];
 let clienteActualPlaca = null;
+let clienteOcupadoActual = null;     // registro activo del cliente (o null)
+let clienteEstuvoDentro = false;
+let refrescando = false;
+let placasPrevias = null;            // para detectar entradas/salidas reales
+let temporizadorEntrada = null;
+let temporizadorSalida = null;
+
+const REGEX_PLACA = /^[A-Z0-9]{5,10}$/;
 
 
 // ==========================================================================
-// USUARIOS TEMPORALES
+// PAGOS CONFIRMADOS DESDE ESTE NAVEGADOR
 // ==========================================================================
-// Cuando exista Backend:
-//
-// GET /api/usuarios
-//
-// deberá reemplazar estos datos temporales.
-// ==========================================================================
+// El backend no expone una consulta de "¿ya pagó?", así que se recuerda aquí
+// cuál fue la estancia pagada. Si el backend devuelve un campo `pago`
+// PAGADO/AUTORIZADO, ese valor tiene prioridad.
 
-let usuariosTemporales = [
+function leerPagos() {
+    try {
+        return JSON.parse(localStorage.getItem("parqueo_pagos") || "{}");
+    } catch (e) {
+        return {};
+    }
+}
 
-    {
-        id: 1,
-        username: "admin",
-        email: "admin@umg.edu.gt",
-        nombre_completo: "Administrador",
-        rol: "ADMIN",
-        activo: true,
-        fecha_creacion: "Demo"
+function guardarPagos(pagos) {
+    try {
+        localStorage.setItem("parqueo_pagos", JSON.stringify(pagos));
+    } catch (e) { /* almacenamiento no disponible */ }
+}
+
+function llaveEstancia(o) {
+    return String(o.registro_id ?? o.fecha_entrada ?? "");
+}
+
+function estaPagado(o) {
+
+    const pagoServidor = String(o.pago ?? "").toUpperCase();
+
+    if (["PAGADO", "AUTORIZADO", "AUTORIZADA"].includes(pagoServidor)) {
+        return true;
     }
 
-];
+    const pagos = leerPagos();
+    const placa = String(o.placa).toUpperCase();
 
+    return pagos[placa] !== undefined && pagos[placa] === llaveEstancia(o);
 
-// ==========================================================================
-// VEHÍCULOS TEMPORALES
-// ==========================================================================
-//
-// Esta lista representa temporalmente la tabla "vehiculos" de la BD.
-//
-// Campos según la estructura que estamos utilizando:
-//
-// id
-// placa
-// tipo_vehiculo
-// propietario_nombre
-// propietario_telefono
-// fecha_registro
-//
-// API BACKEND:
-//
-// GET /api/vehiculos
-//
-// deberá reemplazar esta lista cuando se conecte la BD.
-// ==========================================================================
+}
 
-let vehiculosTemporales = [
+// Borra pagos de vehículos que ya salieron (para que no afecten otra visita).
+function limpiarPagosObsoletos(ocupados) {
 
-    {
-        id: 1,
-        placa: "ABC123",
-        tipo_vehiculo: "RESERVA",
-        propietario_nombre: "Vehículo de prueba",
-        propietario_telefono: "55555555",
-        fecha_registro: "Demo"
-    }
+    const pagos = leerPagos();
+    const dentro = new Set(ocupados.map(o => String(o.placa).toUpperCase()));
+    let cambio = false;
 
-];
-
-
-// ==========================================================================
-// CONFIGURACIÓN DEL BACKEND
-// ==========================================================================
-//
-// Cuando tu compañero tenga las APIs, aquí podrá colocar la dirección.
-//
-// Ejemplo:
-//
-// const API_BASE = "http://localhost:3000/api";
-//
-// Por ahora queda vacío.
-// ==========================================================================
-
-const API_BASE = "";
-
-
-// ==========================================================================
-// CARGAR ESTADO DEL PARQUEO
-// ==========================================================================
-//
-// API BACKEND:
-//
-// En el sistema final esto puede reemplazarse por:
-//
-// GET /api/parqueo/estado
-//
-// ==========================================================================
-
-function cargarEstado() {
-
-    const guardado =
-        localStorage.getItem("parqueo_estado");
-
-
-    if (guardado) {
-
-        try {
-
-            datosParqueo =
-                JSON.parse(guardado);
-
-            // Actualizar categorías sin borrar vehículos ni pagos guardados.
-            const categoriasActuales = {
-                E1: "COMPACTO", E2: "COMPACTO", E3: "MANUAL",
-                E4: "CARGA", E5: "RESERVADO", E6: "GRANDE", E7: "MOTO"
-            };
-            for (const [codigo, categoria] of Object.entries(categoriasActuales)) {
-                if (datosParqueo.espacios[codigo]) {
-                    datosParqueo.espacios[codigo].categoria = categoria;
-                }
-            }
-            guardarEstado();
-            return;
-
-        } catch (error) {
-
-            console.error(
-                "No se pudo leer el estado local:",
-                error
-            );
-
+    for (const placa of Object.keys(pagos)) {
+        if (!dentro.has(placa)) {
+            delete pagos[placa];
+            cambio = true;
         }
+    }
+
+    if (cambio) guardarPagos(pagos);
+
+}
+
+
+// ==========================================================================
+// AVISO DE ERROR DE CONEXIÓN
+// ==========================================================================
+
+function mostrarErrorConexion(mensaje) {
+
+    let banner = document.getElementById("bannerConexion");
+
+    if (!mensaje) {
+        if (banner) banner.remove();
+        return;
+    }
+
+    if (!banner) {
+
+        banner = document.createElement("div");
+        banner.id = "bannerConexion";
+        banner.setAttribute("role", "alert");
+        banner.style.cssText =
+            "background:#fef2f2;color:#991b1b;border:1px solid #fca5a5;" +
+            "padding:10px 14px;margin:10px 0;border-radius:8px;font-size:14px;";
+
+        const main = document.querySelector("main") || document.body;
+        main.insertBefore(banner, main.firstChild);
 
     }
 
-
-    datosParqueo =
-        JSON.parse(
-            JSON.stringify(datosParqueoIniciales)
-        );
-
-
-    guardarEstado();
+    banner.textContent = mensaje;
 
 }
-
-
-// ==========================================================================
-// GUARDAR ESTADO TEMPORAL
-// ==========================================================================
-//
-// Esto es solamente para la demostración.
-//
-// Cuando exista Backend, las operaciones deberán modificar la BD
-// mediante sus endpoints correspondientes.
-// ==========================================================================
-
-function guardarEstado() {
-
-    localStorage.setItem(
-        "parqueo_estado",
-        JSON.stringify(datosParqueo)
-    );
-
-}
-
-
-cargarEstado();
 
 
 // ==========================================================================
 // CARGA PRINCIPAL
 // ==========================================================================
 
-document.addEventListener(
-    "DOMContentLoaded",
-    () => {
+document.addEventListener("DOMContentLoaded", () => {
 
-        const sesionData =
-            sessionStorage.getItem(
-                "usuarioLogueado"
-            );
+    let sesionData = null;
 
+    try {
+        sesionData = sessionStorage.getItem("usuarioLogueado");
+    } catch (e) { /* sin sessionStorage */ }
 
-        if (!sesionData) {
+    if (!sesionData) {
+        window.location.href = "Login.html";
+        return;
+    }
 
-            window.location.href =
-                "Login.html";
+    let usuario;
 
-            return;
+    try {
+        usuario = JSON.parse(sesionData);
+    } catch (e) {
+        window.location.href = "Login.html";
+        return;
+    }
 
+    const labelRol = document.getElementById("label-rol-activo");
+
+    // ----------------------------------------------------------------------
+    // ADMINISTRADOR
+    // ----------------------------------------------------------------------
+
+    if (usuario.tipo === "ADMIN") {
+
+        document.getElementById("vista-admin").style.display = "block";
+        document.getElementById("vista-cliente").style.display = "none";
+
+        if (labelRol) {
+            labelRol.innerText = `Rol: ${String(usuario.username).toUpperCase()}`;
         }
 
+        actualizarInterfazAdmin();
+        renderizarUsuarios();
+        renderizarVehiculos();
 
-        const usuario =
-            JSON.parse(sesionData);
-
-
-        const labelRol =
-            document.getElementById(
-                "label-rol-activo"
-            );
-
-
-        // ==============================================================
-        // ADMINISTRADOR
-        // ==============================================================
-
-        if (usuario.tipo === "ADMIN") {
-
-            document.getElementById(
-                "vista-admin"
-            ).style.display =
-                "block";
-
-
-            document.getElementById(
-                "vista-cliente"
-            ).style.display =
-                "none";
-
-
-            if (labelRol) {
-
-                labelRol.innerText =
-                    `Rol: ${usuario.username.toUpperCase()}`;
-
-            }
-
-
-            cargarEstado();
-
-            actualizarInterfazAdmin();
-
-            renderizarUsuarios();
-
-            renderizarVehiculos();
-
-
-            // ==========================================================
-            // API BACKEND
-            // ==========================================================
-            //
-            // Al iniciar la vista administrativa se podrán consultar:
-            //
-            // GET /api/parqueo/estado
-            // GET /api/usuarios
-            // GET /api/vehiculos
-            //
-            // ==========================================================
-
-        }
-
-
-        // ==============================================================
-        // CLIENTE
-        // ==============================================================
-
-        else {
-
-            document.getElementById(
-                "vista-admin"
-            ).style.display =
-                "none";
-
-
-            document.getElementById(
-                "vista-cliente"
-            ).style.display =
-                "block";
-
-
-            clienteActualPlaca =
-                usuario.placa.toUpperCase();
-
-
-            if (labelRol) {
-
-                labelRol.innerText =
-                    `Placa: ${clienteActualPlaca}`;
-
-            }
-
-
-            cargarEstado();
-
-            cargarDatosCliente(
-                clienteActualPlaca
-            );
-
-
-            // ==========================================================
-            // API BACKEND
-            // ==========================================================
-            //
-            // Posible consulta:
-            //
-            // GET /api/registros-acceso/activo?placa=ABC123
-            //
-            // ==========================================================
-
-        }
+        refrescarAdmin();
+        setInterval(() => {
+            if (!document.hidden) refrescarAdmin();
+        }, REFRESCO_MS);
 
     }
-);
+
+    // ----------------------------------------------------------------------
+    // CLIENTE
+    // ----------------------------------------------------------------------
+
+    else {
+
+        document.getElementById("vista-admin").style.display = "none";
+        document.getElementById("vista-cliente").style.display = "block";
+
+        clienteActualPlaca = String(usuario.placa || "").toUpperCase();
+
+        if (labelRol) {
+            labelRol.innerText = `Placa: ${clienteActualPlaca}`;
+        }
+
+        cargarDatosCliente(clienteActualPlaca);
+        setInterval(() => {
+            if (!document.hidden) cargarDatosCliente(clienteActualPlaca);
+        }, REFRESCO_MS);
+
+    }
+
+});
 
 
 // ==========================================================================
@@ -414,19 +245,11 @@ document.addEventListener(
 
 function cerrarSesion() {
 
-    sessionStorage.removeItem(
-        "usuarioLogueado"
-    );
+    try {
+        sessionStorage.removeItem("usuarioLogueado");
+    } catch (e) { /* sin sessionStorage */ }
 
-
-    // API BACKEND:
-    //
-    // Si posteriormente se utilizan tokens o sesiones reales,
-    // aquí se puede invalidar la sesión.
-
-
-    window.location.href =
-        "Login.html";
+    window.location.href = "Login.html";
 
 }
 
@@ -438,114 +261,215 @@ function cerrarSesion() {
 function cambiarSubpestana(sub) {
 
     const vistas = {
-
-        operacion:
-            "sub-operacion",
-
-        historial:
-            "sub-historial",
-
-        alarmas:
-            "sub-alarmas",
-
-        usuarios:
-            "sub-usuarios",
-
-        vehiculos:
-            "sub-vehiculos"
-
+        operacion: "sub-operacion",
+        historial: "sub-historial",
+        alarmas: "sub-alarmas",
+        usuarios: "sub-usuarios",
+        vehiculos: "sub-vehiculos"
     };
-
 
     const botones = {
-
-        operacion:
-            "btn-tab-op",
-
-        historial:
-            "btn-tab-hist",
-
-        alarmas:
-            "btn-tab-alrt",
-
-        usuarios:
-            "btn-tab-users",
-
-        vehiculos:
-            "btn-tab-vehiculos"
-
+        operacion: "btn-tab-op",
+        historial: "btn-tab-hist",
+        alarmas: "btn-tab-alrt",
+        usuarios: "btn-tab-users",
+        vehiculos: "btn-tab-vehiculos"
     };
 
+    Object.entries(vistas).forEach(([nombre, id]) => {
+        const elemento = document.getElementById(id);
+        if (elemento) {
+            elemento.style.display = nombre === sub ? "block" : "none";
+        }
+    });
 
-    Object.entries(vistas)
-        .forEach(([nombre, id]) => {
+    Object.entries(botones).forEach(([nombre, id]) => {
+        const boton = document.getElementById(id);
+        if (boton) {
+            boton.className = `tab-btn ${nombre === sub ? "active" : ""}`;
+        }
+    });
 
-            const elemento =
-                document.getElementById(id);
+    if (sub === "usuarios") renderizarUsuarios();
+    if (sub === "vehiculos") renderizarVehiculos();
+    if (sub === "historial") refrescarAdmin();
+
+}
 
 
-            if (elemento) {
+// ==========================================================================
+// REFRESCAR DATOS DEL ADMIN DESDE LA API
+// ==========================================================================
 
-                elemento.style.display =
-                    nombre === sub
-                        ? "block"
-                        : "none";
+function normalizarCategoria(valor, cajon) {
 
+    const t = String(valor ?? "").toLowerCase();
+
+    const mapa = {
+        compacto: "COMPACTO", manual: "MANUAL", carga: "CARGA",
+        reserva: "RESERVADO", reservado: "RESERVADO",
+        grande: "GRANDE", moto: "MOTO"
+    };
+
+    return mapa[t] || CATEGORIAS[cajon];
+
+}
+
+async function refrescarAdmin() {
+
+    if (refrescando) return;
+    refrescando = true;
+
+    try {
+
+        const [rEsp, rOcu, rHist] = await Promise.allSettled([
+            apiFetch("/espacios"),
+            consultarOcupados(),
+            apiFetch("/historial?limit=50")
+        ]);
+
+        // Si fallan los dos datos principales, se avisa y se deja lo último visto.
+        if (rEsp.status === "rejected" && rOcu.status === "rejected") {
+            mostrarErrorConexion(rEsp.reason.message);
+            return;
+        }
+
+        mostrarErrorConexion(null);
+
+        const nuevo = crearEstadoVacio();
+        nuevo.talanqueraEntrada = datosParqueo.talanqueraEntrada;
+        nuevo.talanqueraSalida = datosParqueo.talanqueraSalida;
+        nuevo.alarmas = datosParqueo.alarmas;
+        nuevo.historial = datosParqueo.historial;
+
+        // ---- Espacios (mapa) ----
+        if (rEsp.status === "fulfilled") {
+
+            comoLista(rEsp.value).forEach(item => {
+
+                const n = numeroCajon(item.codigo ?? item.espacio ?? item.cajon);
+                const slot = nuevo.espacios[`E${n}`];
+
+                if (!slot) return;
+
+                slot.categoria = normalizarCategoria(
+                    item.categoria ?? item.tipo, n
+                );
+
+                const estado = String(item.estado ?? "LIBRE").toUpperCase();
+                slot.estado = estado === "LIBRE" ? "LIBRE" : "OCUPADO";
+
+                const placa = item.placa ?? item.vehiculo_placa;
+                if (placa && slot.estado !== "LIBRE") {
+                    slot.placa = String(placa).toUpperCase();
+                }
+
+            });
+
+        }
+
+        // ---- Ocupados (placa, hora de entrada y pago de cada cajón) ----
+        if (rOcu.status === "fulfilled") {
+
+            ocupadosActuales = rOcu.value;
+            limpiarPagosObsoletos(ocupadosActuales);
+
+            ocupadosActuales.forEach(o => {
+
+                const n = numeroCajon(o.espacio ?? o.codigo ?? o.cajon);
+                const slot = nuevo.espacios[`E${n}`];
+
+                if (!slot) return;
+
+                slot.estado = "OCUPADO";
+                slot.placa = String(o.placa).toUpperCase();
+                slot.horaEntrada = formatearFecha(o.fecha_entrada);
+                slot.pagado = estaPagado(o);
+
+            });
+
+            detectarMovimientos(ocupadosActuales);
+
+            // Cajón que la tabla `espacios` marca OCUPADO pero que no tiene
+            // ningún registro activo (ni placa): quedó "pegado" en la BD.
+            for (const codigo in nuevo.espacios) {
+                const s = nuevo.espacios[codigo];
+                s.fantasma = s.estado !== "LIBRE" && !s.placa;
             }
 
-        });
+        }
 
+        // ---- Historial ----
+        if (rHist.status === "fulfilled") {
 
-    Object.entries(botones)
-        .forEach(([nombre, id]) => {
+            nuevo.historial = comoLista(rHist.value).map(h => ({
+                id: h.registro_id ?? h.id,
+                placa: h.placa,
+                espacio: `E${numeroCajon(h.espacio ?? h.codigo) ?? "?"}`,
+                entrada: formatearFecha(h.fecha_entrada),
+                salida: formatearFecha(h.fecha_salida),
+                estado: h.estado ?? "FINALIZADO",
+                monto: Number(h.monto_total ?? 0).toFixed(2)
+            }));
 
-            const boton =
-                document.getElementById(id);
+        }
 
+        datosParqueo = nuevo;
+        actualizarInterfazAdmin();
 
-            if (boton) {
+        const tabVeh = document.getElementById("sub-vehiculos");
+        if (tabVeh && tabVeh.style.display !== "none") renderizarVehiculos();
 
-                boton.className =
-                    `tab-btn ${
-                        nombre === sub
-                            ? "active"
-                            : ""
-                    }`;
+    } catch (error) {
 
-            }
+        console.error("Error refrescando el parqueo:", error);
+        mostrarErrorConexion(error.message);
 
-        });
+    } finally {
 
-
-    // ==============================================================
-    // USUARIOS
-    // ==============================================================
-
-    if (sub === "usuarios") {
-
-        renderizarUsuarios();
-
-
-        // API BACKEND:
-        //
-        // GET /api/usuarios
+        refrescando = false;
 
     }
 
-
-    // ==============================================================
-    // VEHÍCULOS
-    // ==============================================================
-
-    if (sub === "vehiculos") {
-
-        renderizarVehiculos();
+}
 
 
-        // API BACKEND:
-        //
-        // GET /api/vehiculos
+// Compara con la consulta anterior: si entró o salió alguien (por RFID real)
+// se enciende el indicador de la talanquera unos segundos.
+function detectarMovimientos(ocupados) {
 
+    const actuales = new Set(ocupados.map(o => String(o.placa).toUpperCase()));
+
+    if (placasPrevias) {
+
+        const entro = [...actuales].some(p => !placasPrevias.has(p));
+        const salio = [...placasPrevias].some(p => !actuales.has(p));
+
+        if (entro) abrirTalanquera("Entrada");
+        if (salio) abrirTalanquera("Salida");
+
+    }
+
+    placasPrevias = actuales;
+
+}
+
+function abrirTalanquera(cual) {
+
+    const clave = `talanquera${cual}`;
+    datosParqueo[clave] = "ABIERTA";
+
+    const tiempo = setTimeout(() => {
+        datosParqueo[clave] = "CERRADA";
+        actualizarInterfazAdmin();
+    }, 4000);
+
+    if (cual === "Entrada") {
+        clearTimeout(temporizadorEntrada);
+        temporizadorEntrada = tiempo;
+    } else {
+        clearTimeout(temporizadorSalida);
+        temporizadorSalida = tiempo;
     }
 
 }
@@ -557,475 +481,225 @@ function cambiarSubpestana(sub) {
 
 function actualizarInterfazAdmin() {
 
+    // ---------------- Talanqueras ----------------
 
-    // ======================================================================
-    // TALANQUERA DE ENTRADA
-    // ======================================================================
+    [["estado-t-entrada", datosParqueo.talanqueraEntrada],
+     ["estado-t-salida", datosParqueo.talanqueraSalida]]
+        .forEach(([id, valor]) => {
 
-    const tEntrada =
-        document.getElementById(
-            "estado-t-entrada"
-        );
+            const el = document.getElementById(id);
 
+            if (el) {
+                el.innerText = valor;
+                el.className = `badge ${valor === "ABIERTA" ? "abierta" : "cerrada"}`;
+            }
 
-    if (tEntrada) {
+        });
 
-        tEntrada.innerText =
-            datosParqueo.talanqueraEntrada;
-
-
-        tEntrada.className =
-            `badge ${
-                datosParqueo.talanqueraEntrada === "ABIERTA"
-                    ? "abierta"
-                    : "cerrada"
-            }`;
-
-    }
-
-
-    // ======================================================================
-    // TALANQUERA DE SALIDA
-    // ======================================================================
-
-    const tSalida =
-        document.getElementById(
-            "estado-t-salida"
-        );
-
-
-    if (tSalida) {
-
-        tSalida.innerText =
-            datosParqueo.talanqueraSalida;
-
-
-        tSalida.className =
-            `badge ${
-                datosParqueo.talanqueraSalida === "ABIERTA"
-                    ? "abierta"
-                    : "cerrada"
-            }`;
-
-    }
-
-
-    // ======================================================================
-    // POSICIONES DE LOS CUADRITOS DEL MAPA
-    // ======================================================================
-    //
-    // ESTO ES ÚNICAMENTE VISUAL.
-    //
-    // top mayor  = baja
-    // top menor  = sube
-    //
-    // left mayor = derecha
-    // left menor = izquierda
-    //
-    // Si después quieres mover E2, E3, etc.,
-    // ESTE ES EL LUGAR.
-    // ======================================================================
+    // ---------------- Posiciones de los cuadritos del mapa ----------------
+    // ESTO ES ÚNICAMENTE VISUAL. top mayor = baja, left mayor = derecha.
 
     const coordenadasMap = {
-
-        "E1": {
-            top: "39.5%",
-            left: "14%"
-        },
-
-        "E2": {
-            top: "23.5%",
-            left: "14%"
-        },
-
-        "E3": {
-            top: "17%",
-            left: "52%"
-        },
-
-        "E4": {
-            top: "15.5%",
-            left: "84%"
-        },
-
-        "E5": {
-            top: "49%",
-            left: "86%"
-        },
-
-        "E6": {
-            top: "43.5%",
-            left: "58%"
-        },
-
-        "E7": {
-            top: "60%",
-            left: "58%"
-        }
-
+        "E1": { top: "39.5%", left: "14%" },
+        "E2": { top: "23.5%", left: "14%" },
+        "E3": { top: "17%",   left: "52%" },
+        "E4": { top: "15.5%", left: "84%" },
+        "E5": { top: "49%",   left: "86%" },
+        "E6": { top: "43.5%", left: "58%" },
+        "E7": { top: "60%",   left: "58%" }
     };
 
+    // ---------------- Dibujar espacios ----------------
 
-    // ======================================================================
-    // DIBUJAR ESPACIOS
-    // ======================================================================
+    for (const codigo in datosParqueo.espacios) {
 
-    for (
-        const codigo in datosParqueo.espacios
-    ) {
+        const esp = datosParqueo.espacios[codigo];
+        const slot = document.getElementById(`slot-${codigo}`);
 
-        const esp =
-            datosParqueo.espacios[codigo];
-
-
-        const elementoSlot =
-            document.getElementById(
-                `slot-${codigo}`
-            );
-
-
-        if (!elementoSlot) {
-
-            continue;
-
-        }
-
+        if (!slot) continue;
 
         if (coordenadasMap[codigo]) {
-
-            elementoSlot.style.position =
-                "absolute";
-
-
-            elementoSlot.style.top =
-                coordenadasMap[codigo].top;
-
-
-            elementoSlot.style.left =
-                coordenadasMap[codigo].left;
-
+            slot.style.position = "absolute";
+            slot.style.top = coordenadasMap[codigo].top;
+            slot.style.left = coordenadasMap[codigo].left;
         }
 
-
-        elementoSlot.style.zIndex =
-            "10";
-
-
-        elementoSlot.style.padding =
-            "5px";
-
-
-        elementoSlot.style.borderRadius =
-            "6px";
-
-
-        elementoSlot.style.textAlign =
-            "center";
-
-
-        elementoSlot.style.fontSize =
-            "11px";
-
-
-        // ==============================================================
-        // ESPACIO LIBRE
-        // ==============================================================
+        slot.style.zIndex = "10";
+        slot.style.padding = "5px";
+        slot.style.borderRadius = "6px";
+        slot.style.textAlign = "center";
+        slot.style.fontSize = "11px";
+        slot.style.color = "#ffffff";
+        slot.title = `${codigo} · ${esp.categoria}`;
 
         if (esp.estado === "LIBRE") {
 
-            elementoSlot.style.backgroundColor =
-                "rgba(16, 185, 129, 0.85)";
+            slot.style.backgroundColor = "rgba(16, 185, 129, 0.85)";
+            slot.style.border = "2px solid #059669";
+            slot.innerHTML = `<strong>${codigo}</strong><br><small>Libre</small>`;
 
+        } else if (esp.fantasma) {
 
-            elementoSlot.style.border =
-                "2px solid #059669";
+            slot.style.backgroundColor = "rgba(245, 158, 11, 0.9)";
+            slot.style.border = "2px dashed #b45309";
+            slot.title = `${codigo}: figura ocupado en la BD pero no tiene vehículo (registro activo)`;
+            slot.innerHTML = `<strong>${codigo}</strong><br><small>Sin registro</small>`;
 
+        } else {
 
-            elementoSlot.style.color =
-                "#ffffff";
-
-
-            elementoSlot.innerHTML =
-                `
-                    <strong>${codigo}</strong>
-                    <br>
-                    <small>Libre</small>
-                `;
-
-        }
-
-
-        // ==============================================================
-        // ESPACIO OCUPADO
-        // ==============================================================
-
-        else {
-
-            elementoSlot.style.backgroundColor =
-                "rgba(239, 68, 68, 0.85)";
-
-
-            elementoSlot.style.border =
-                "2px solid #dc2626";
-
-
-            elementoSlot.style.color =
-                "#ffffff";
-
-
-            elementoSlot.innerHTML =
-                `
-                    <strong>${codigo}</strong>
-                    <br>
-                    <small>
-                        ${esp.placa || "Ocupado"}
-                    </small>
-                `;
+            slot.style.backgroundColor = "rgba(239, 68, 68, 0.85)";
+            slot.style.border = "2px solid #dc2626";
+            slot.innerHTML =
+                `<strong>${codigo}</strong><br><small>${esc(esp.placa || "Ocupado")}</small>`;
 
         }
 
     }
 
+    // ---------------- Vehículos actualmente dentro ----------------
 
-    // ======================================================================
-    // VEHÍCULOS ACTUALMENTE DENTRO DEL PARQUEO
-    // ======================================================================
-    //
-    // IMPORTANTE:
-    //
-    // Esta tabla NO es la misma que la nueva pestaña Vehículos.
-    //
-    // Esta tabla muestra vehículos que actualmente tienen
-    // un espacio ocupado.
-    //
-    // API BACKEND:
-    //
-    // GET /api/registros-acceso/activos
-    //
-    // ======================================================================
-
-    const tabla =
-        document.getElementById(
-            "tablaClientesAdmin"
-        );
-
+    const tabla = document.getElementById("tablaClientesAdmin");
 
     if (tabla) {
 
-        tabla.innerHTML =
-            "";
+        let filas = "";
 
+        for (const codigo in datosParqueo.espacios) {
 
-        for (
-            const codigo in datosParqueo.espacios
-        ) {
+            const esp = datosParqueo.espacios[codigo];
 
-            const esp =
-                datosParqueo.espacios[codigo];
+            if (esp.estado === "LIBRE" || esp.fantasma) continue;
 
+            const badgePago = esp.pagado
+                ? '<span class="badge pagado">PAGADO</span>'
+                : '<span class="badge pend">PENDIENTE</span>';
 
-            if (
-                esp.estado === "OCUPADO"
-                ||
-                esp.estado === "RESERVADO"
-            ) {
+            filas += `
+                <tr>
+                    <td>${esc(esp.placa || "---")}</td>
+                    <td>${esc(esp.categoria)}</td>
+                    <td>${codigo}</td>
+                    <td>${badgePago}</td>
+                </tr>`;
 
-                const badgePago =
-                    esp.pagado
+        }
 
-                        ? '<span class="badge pagado">PAGADO</span>'
+        tabla.innerHTML = filas;
 
-                        : '<span class="badge pend">PENDIENTE</span>';
+    }
 
+    // ---------------- Aviso de cajones inconsistentes ----------------
 
-                tabla.innerHTML +=
-                    `
-                        <tr>
+    const fantasmas = Object.keys(datosParqueo.espacios)
+        .filter(c => datosParqueo.espacios[c].fantasma);
 
-                            <td>
-                                ${esp.placa || "---"}
-                            </td>
+    const tarjetaMapa = document.querySelector(".map-card");
 
-                            <td>
-                                ${esp.categoria}
-                            </td>
+    if (tarjetaMapa) {
 
-                            <td>
-                                ${codigo}
-                            </td>
+        let aviso = document.getElementById("avisoInconsistencias");
 
-                            <td>
-                                ${badgePago}
-                            </td>
+        if (!aviso) {
+            aviso = document.createElement("p");
+            aviso.id = "avisoInconsistencias";
+            aviso.style.cssText =
+                "margin:10px 0 0;padding:8px 12px;border-radius:8px;font-size:13px;" +
+                "background:#fffbeb;color:#92400e;border:1px solid #fcd34d;";
+            tarjetaMapa.appendChild(aviso);
+        }
 
-                        </tr>
-                    `;
+        aviso.style.display = fantasmas.length ? "block" : "none";
+        aviso.textContent =
+            `⚠️ ${fantasmas.join(", ")} figura(n) como OCUPADO en la base de datos pero sin ` +
+            "vehículo con registro activo (quedó pegado). Hay que liberarlo en la BD.";
 
-            }
+    }
+
+    // ---------------- Lista de vehículos para "Salida Manual" ----------------
+
+    const selSalida = document.getElementById("placaSalidaAdmin");
+
+    if (selSalida) {
+
+        const placas = Object.keys(datosParqueo.espacios)
+            .map(c => datosParqueo.espacios[c])
+            .filter(e => e.estado !== "LIBRE" && e.placa)
+            .map(e => e.placa);
+
+        const firma = placas.join("|");
+
+        // Solo se reconstruye si cambió la lista (así no se cierra el desplegable).
+        if (selSalida.dataset.lista !== firma) {
+
+            const elegida = selSalida.value;
+            selSalida.dataset.lista = firma;
+
+            selSalida.innerHTML = placas.length
+                ? placas.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("")
+                : '<option value="">No hay vehículos dentro</option>';
+
+            if (placas.includes(elegida)) selSalida.value = elegida;
 
         }
 
     }
 
+    // ---------------- Historial (viene de la BD) ----------------
 
-    // ======================================================================
-    // HISTORIAL
-    // ======================================================================
-    //
-    // API BACKEND:
-    //
-    // GET /api/registros-acceso/historial
-    //
-    // ======================================================================
-
-    const tablaHistorial =
-        document.getElementById(
-            "tablaHistorialBD"
-        );
-
+    const tablaHistorial = document.getElementById("tablaHistorialBD");
 
     if (tablaHistorial) {
 
-        tablaHistorial.innerHTML =
-            "";
-
-
-        datosParqueo.historial
-            .forEach(h => {
-
-                tablaHistorial.innerHTML +=
-                    `
-                        <tr>
-
-                            <td>
-                                #${h.id}
-                            </td>
-
-                            <td>
-                                ${h.placa}
-                            </td>
-
-                            <td>
-                                ${h.espacio}
-                            </td>
-
-                            <td>
-                                ${h.entrada}
-                            </td>
-
-                            <td>
-                                ${h.salida}
-                            </td>
-
-                            <td>
-                                <span class="badge pagado">
-                                    ${h.estado}
-                                </span>
-                            </td>
-
-                            <td>
-                                $${h.monto}
-                            </td>
-
-                        </tr>
-                    `;
-
-            });
+        tablaHistorial.innerHTML = datosParqueo.historial.length
+            ? datosParqueo.historial.map(h => `
+                <tr>
+                    <td>#${esc(h.id)}</td>
+                    <td>${esc(h.placa)}</td>
+                    <td>${esc(h.espacio)}</td>
+                    <td>${esc(h.entrada)}</td>
+                    <td>${esc(h.salida)}</td>
+                    <td><span class="badge pagado">${esc(h.estado)}</span></td>
+                    <td>$${esc(h.monto)}</td>
+                </tr>`).join("")
+            : '<tr><td colspan="7">Aún no hay salidas registradas.</td></tr>';
 
     }
 
+    // ---------------- Alarmas (sin API: se deja como estaba) ----------------
 
-    // ======================================================================
-    // ALARMAS
-    // ======================================================================
-    //
-    // API BACKEND:
-    //
-    // GET /api/alarmas
-    //
-    // ======================================================================
-
-    const tablaAlarmas =
-        document.getElementById(
-            "tablaAlarmasBD"
-        );
-
+    const tablaAlarmas = document.getElementById("tablaAlarmasBD");
 
     if (tablaAlarmas) {
 
-        tablaAlarmas.innerHTML =
-            "";
+        let noAtendidas = 0;
+        let filas = "";
 
+        datosParqueo.alarmas.forEach(a => {
 
-        let noAtendidas =
-            0;
+            if (a.atendida) return;
 
+            noAtendidas++;
 
-        datosParqueo.alarmas
-            .forEach(a => {
+            filas += `
+                <tr>
+                    <td>${esc(a.tipo)}</td>
+                    <td><span class="badge pend">${esc(a.nivel)}</span></td>
+                    <td>${esc(a.espacio)}</td>
+                    <td>${esc(a.descripcion)}</td>
+                    <td>
+                        <button class="btn-secondary"
+                                onclick="atenderAlarma(${Number(a.id)})">
+                            Resolver
+                        </button>
+                    </td>
+                </tr>`;
 
+        });
 
-                if (!a.atendida) {
+        tablaAlarmas.innerHTML = filas;
 
-                    noAtendidas++;
-
-                }
-
-
-                tablaAlarmas.innerHTML +=
-                    `
-                        <tr>
-
-                            <td>
-                                ${a.tipo}
-                            </td>
-
-                            <td>
-
-                                <span class="badge pend">
-                                    ${a.nivel}
-                                </span>
-
-                            </td>
-
-                            <td>
-                                ${a.espacio}
-                            </td>
-
-                            <td>
-                                ${a.descripcion}
-                            </td>
-
-                            <td>
-
-                                <button
-                                    class="btn-secondary"
-                                    onclick="atenderAlarma(${a.id})">
-
-                                    Resolver
-
-                                </button>
-
-                            </td>
-
-                        </tr>
-                    `;
-
-            });
-
-
-        const badgeAlarmas =
-            document.getElementById(
-                "badge-count-alarmas"
-            );
-
-
-        if (badgeAlarmas) {
-
-            badgeAlarmas.innerText =
-                noAtendidas;
-
-        }
+        const badgeAlarmas = document.getElementById("badge-count-alarmas");
+        if (badgeAlarmas) badgeAlarmas.innerText = noAtendidas;
 
     }
 
@@ -1033,1447 +707,612 @@ function actualizarInterfazAdmin() {
 
 
 // ==========================================================================
-// REGISTRO MANUAL DE INGRESO
-// ==========================================================================
-//
-// OJO:
-//
-// REGISTRAR VEHÍCULO y REGISTRAR INGRESO son cosas diferentes.
-//
-// Esta parte significa:
-//
-// "El vehículo está entrando al parqueo".
-//
-// API BACKEND:
-//
-// POST /api/registros-acceso
-//
-// El Backend deberá relacionar:
-// - vehiculo_id
-// - espacio_id
-// - usuario_id
-// - fecha_entrada
-// - estado
-//
+// FUNCIONES DE COMANDO (autómata y RFID)
 // ==========================================================================
 
-const formAdminRegistro =
-    document.getElementById(
-        "formAdminRegistro"
-    );
+function enviarComandoAutomata(texto) {
+    return apiFetch("/comando", { method: "POST", body: { comando: texto } });
+}
 
+function enviarComandoRfid(texto) {
+    return apiFetch("/rfid/comando", { method: "POST", body: { comando: texto } });
+}
 
-if (formAdminRegistro) {
+function vehiculoYaRegistrado(error) {
+    return error.status === 409 && /ya registrado/i.test(error.message);
+}
 
-    formAdminRegistro.addEventListener(
-        "submit",
-        function (e) {
+// Autómata: REGISTRAR(PLACA, manual) por /api/comando.
+// En el backend actual ESTO HACE LAS DOS COSAS EN UN SOLO PASO:
+//   1. Crea el vehículo en vehiculosnuevos.
+//   2. Deja una solicitud PENDIENTE en solicitudes_manualnuevo para el cajón 3.
+// (El endpoint viejo /api/manual/pendiente ya no existe: está comentado en urls.py).
+//
+// Reglas del backend a tener en cuenta:
+//   - Solo puede haber UNA solicitud PENDIENTE en todo el sistema a la vez.
+//   - Si la placa ya estaba registrada, REGISTRAR falla con 409 "Vehículo ya
+//     registrado" y NO crea una solicitud nueva (no hay forma de volver a
+//     poner en cola una placa manual ya usada mientras no se reactive
+//     /api/manual/pendiente en el backend).
+//
+// Devuelve true si se creó una solicitud nueva, false si la placa ya existía
+// (en ese caso puede que ya tenga una solicitud pendiente o ya asignada de
+// un intento anterior; se intenta igual el ASIGNAR(MANUAL) después).
+async function prepararVehiculoManual(placa) {
 
-            e.preventDefault();
+    try {
 
+        await enviarComandoAutomata(`REGISTRAR(${placa}, manual)`);
 
-            cargarEstado();
+        try {
+            localStorage.setItem("parqueo_placa_manual", placa);
+        } catch (e) { /* almacenamiento no disponible */ }
 
+        return true;
 
-            const tipoSeleccionado =
-                document.getElementById(
-                    "tipoVehiculo"
-                ).value.toUpperCase();
+    } catch (error) {
 
+        if (vehiculoYaRegistrado(error)) return false;
 
-            const placa =
-                document.getElementById(
-                    "placaAdmin"
-                ).value.toUpperCase();
-
-
-            let espacioEncontrado =
-                null;
-
-
-            // ==========================================================
-            // BUSCAR ESPACIO DE LA CATEGORÍA
-            // ==========================================================
-
-            for (
-                const codigo in datosParqueo.espacios
-            ) {
-
-                const esp =
-                    datosParqueo.espacios[codigo];
-
-
-                if (
-                    esp.estado === "LIBRE"
-                    &&
-                    (
-                        esp.categoria === tipoSeleccionado
-                    )
-                ) {
-
-                    espacioEncontrado =
-                        codigo;
-
-                    break;
-
-                }
-
-            }
-
-
-            // ==========================================================
-            // NO ASIGNAR OTRA CATEGORÍA AUTOMÁTICAMENTE
-            // E3 SE UTILIZA SOLAMENTE CON LA OPCIÓN MANUAL
-            // ==========================================================
-
-
-
-            if (!espacioEncontrado) {
-
-                alert(
-                    "No hay espacios libres disponibles en el parqueo."
-                );
-
-                return;
-
-            }
-
-
-            // ==========================================================
-            // SIMULACIÓN LOCAL DEL INGRESO
-            // ==========================================================
-
-            datosParqueo
-                .espacios[espacioEncontrado]
-                .estado =
-                    "OCUPADO";
-
-
-            datosParqueo
-                .espacios[espacioEncontrado]
-                .placa =
-                    placa;
-
-
-            datosParqueo
-                .espacios[espacioEncontrado]
-                .horaEntrada =
-                    new Date()
-                        .toLocaleTimeString(
-                            [],
-                            {
-                                hour: "2-digit",
-                                minute: "2-digit"
-                            }
-                        );
-
-
-            datosParqueo
-                .espacios[espacioEncontrado]
-                .pagado =
-                    false;
-
-
-            datosParqueo
-                .talanqueraEntrada =
-                    "ABIERTA";
-
-
-            guardarEstado();
-
-            actualizarInterfazAdmin();
-
-
-            // ==========================================================
-            // SIMULAR CIERRE DE TALANQUERA
-            // ==========================================================
-
-            setTimeout(
-                () => {
-
-                    cargarEstado();
-
-
-                    datosParqueo
-                        .talanqueraEntrada =
-                            "CERRADA";
-
-
-                    guardarEstado();
-
-                    actualizarInterfazAdmin();
-
-                },
-                4000
+        if (error.status === 409) {
+            throw new ApiError(
+                `${error.message} Solo puede haber una solicitud del cajón Manual ` +
+                "pendiente a la vez en todo el sistema; espere a que se asigne o salga " +
+                "la que está en curso."
             );
-
-
-            alert(
-                `Vehículo ${placa} asignado a ${espacioEncontrado}. Talanquera abierta.`
-            );
-
-
-            formAdminRegistro.reset();
-
         }
-    );
+
+        throw error;
+
+    }
 
 }
 
 
 // ==========================================================================
-// ATENDER ALARMA
+// REGISTRO MANUAL DE INGRESO (simula la lectura del RFID en la entrada)
 // ==========================================================================
-//
-// API BACKEND:
-//
-// PATCH /api/alarmas/{id}
-//
-// Backend deberá actualizar:
-//
-// atendida = true
-//
-// y registrar usuario_atendio_id.
+// Fijos:  ASIGNAR(PLACA)   -> el backend ocupa el cajón de esa placa.
+// Manual: REGISTRAR(placa, manual) [crea vehículo + solicitud pendiente]
+//         y después ASIGNAR(MANUAL) -> ocupa el cajón 3 con esa solicitud.
+
+const formAdminRegistro = document.getElementById("formAdminRegistro");
+
+if (formAdminRegistro) {
+
+    formAdminRegistro.addEventListener("submit", async function (e) {
+
+        e.preventDefault();
+
+        const boton = formAdminRegistro.querySelector("button[type=submit]");
+        const tipo = document.getElementById("tipoVehiculo").value.toUpperCase();
+        const placa = document.getElementById("placaAdmin").value.trim().toUpperCase();
+
+        if (!REGEX_PLACA.test(placa)) {
+            alert("Placa inválida. Use solo letras y números (5 a 10 caracteres).");
+            return;
+        }
+
+        boton.disabled = true;
+
+        try {
+
+            let comando;
+            let extra = "";
+
+            if (tipo === "MANUAL") {
+
+                const creado = await prepararVehiculoManual(placa);
+                comando = "ASIGNAR(MANUAL)";
+                extra = creado
+                    ? " (vehículo manual creado y solicitud enviada)"
+                    : " (la placa ya estaba registrada; se intenta asignar con la solicitud existente)";
+
+            } else {
+
+                const tag = tagPorPlaca(placa);
+
+                if (!tag) {
+                    throw new ApiError(
+                        `La placa ${placa} no tiene un tag asignado. ` +
+                        `Placas fijas: ${TAGS_RFID.filter(t => t.placa).map(t => t.placa).join(", ")}.`
+                    );
+                }
+
+                if (tag.tipo !== tipo) {
+                    throw new ApiError(
+                        `La placa ${placa} corresponde a ${tag.tipo} (cajón ${tag.cajon}), no a ${tipo}.`
+                    );
+                }
+
+                comando = `ASIGNAR(${placa})`;
+
+            }
+
+            const r = await enviarComandoRfid(comando);
+
+            if (r.abrir_barrera) abrirTalanquera("Entrada");
+
+            await refrescarAdmin();
+
+            alert(
+                `${r.mensaje || "Entrada autorizada"}: ${placa} → cajón ${r.cajon ?? "?"}.` +
+                extra
+            );
+
+            formAdminRegistro.reset();
+
+        } catch (error) {
+
+            alert(`No se pudo registrar el ingreso: ${error.message}`);
+
+        } finally {
+
+            boton.disabled = false;
+
+        }
+
+    });
+
+}
+
+
+// ==========================================================================
+// SALIDA MANUAL (simula la lectura del RFID en la salida)
+// ==========================================================================
+// 1. Si no hay pago registrado, pide confirmación y manda POST /pago/confirmar
+//    (el backend solo deja salir a quien tenga una autorización).
+// 2. Manda SALIDA(PLACA) para los fijos o SALIDA(MANUAL) para el cajón 3.
+
+async function darSalidaManual(placa) {
+
+    const o = ocupadosActuales.find(
+        x => String(x.placa).toUpperCase() === placa
+    );
+
+    if (!o) {
+        throw new ApiError(`${placa} no tiene un registro activo en el parqueo.`);
+    }
+
+    const tag = tagPorPlaca(placa);
+
+    // Una placa que no es de los 6 tags fijos solo puede salir por el cajón 3.
+    if (!tag && numeroCajon(o.espacio ?? o.codigo ?? o.cajon) !== 3) {
+        throw new ApiError(`${placa} no es un vehículo fijo ni está en el cajón 3.`);
+    }
+
+    if (!estaPagado(o)) {
+
+        const seguir = confirm(
+            `${placa} no tiene un pago registrado desde esta página.\n\n` +
+            "¿Autorizar el pago y dar salida de todos modos?"
+        );
+
+        if (!seguir) return null;
+
+        await apiFetch("/pago/confirmar", { method: "POST", body: { placa } });
+
+    }
+
+    const r = await enviarComandoRfid(`SALIDA(${tag ? placa : "MANUAL"})`);
+
+    if (r.abrir_barrera) abrirTalanquera("Salida");
+
+    await refrescarAdmin();
+
+    return r;
+
+}
+
+const formAdminSalida = document.getElementById("formAdminSalida");
+
+if (formAdminSalida) {
+
+    formAdminSalida.addEventListener("submit", async function (e) {
+
+        e.preventDefault();
+
+        const boton = formAdminSalida.querySelector("button[type=submit]");
+        const placa = document.getElementById("placaSalidaAdmin").value;
+
+        if (!placa) {
+            alert("No hay vehículos dentro del parqueo.");
+            return;
+        }
+
+        boton.disabled = true;
+
+        try {
+
+            const r = await darSalidaManual(placa);
+
+            if (r) alert(`${r.mensaje || "Salida autorizada"}: ${placa}.`);
+
+        } catch (error) {
+
+            alert(`No se pudo dar la salida: ${error.message}`);
+
+        } finally {
+
+            boton.disabled = false;
+
+        }
+
+    });
+
+}
+
+
+// ==========================================================================
+// ATENDER ALARMA (local: no hay endpoint)
 // ==========================================================================
 
 function atenderAlarma(id) {
 
-    cargarEstado();
-
-
-    const alarma =
-        datosParqueo.alarmas.find(
-            x => x.id === id
-        );
-
+    const alarma = datosParqueo.alarmas.find(x => x.id === id);
 
     if (alarma) {
-
-        alarma.atendida =
-            true;
-
-
-        guardarEstado();
-
+        alarma.atendida = true;
         actualizarInterfazAdmin();
-
     }
 
 }
 
 
 // ==========================================================================
-// MOSTRAR USUARIOS
+// USUARIOS (demostración: la BD nueva no tiene tabla de usuarios)
 // ==========================================================================
-//
-// API BACKEND:
-//
-// GET /api/usuarios
-//
-// ==========================================================================
+
+let usuariosTemporales = [
+    {
+        id: 1,
+        username: "admin",
+        email: "admin@umg.edu.gt",
+        nombre_completo: "Administrador",
+        rol: "ADMIN",
+        activo: true,
+        fecha_creacion: "Demo"
+    }
+];
 
 function renderizarUsuarios() {
 
-    const tabla =
-        document.getElementById(
-            "tablaUsuariosAdmin"
-        );
+    const tabla = document.getElementById("tablaUsuariosAdmin");
+    if (!tabla) return;
 
-
-    if (!tabla) {
-
-        return;
-
-    }
-
-
-    tabla.innerHTML =
-        "";
-
-
-    usuariosTemporales
-        .forEach(usuario => {
-
-            tabla.innerHTML +=
-                `
-                    <tr>
-
-                        <td>
-                            ${usuario.id}
-                        </td>
-
-                        <td>
-                            ${usuario.username}
-                        </td>
-
-                        <td>
-                            ${usuario.email}
-                        </td>
-
-                        <td>
-                            ${usuario.nombre_completo}
-                        </td>
-
-                        <td>
-                            ${usuario.rol}
-                        </td>
-
-                        <td>
-                            ${
-                                usuario.activo
-                                    ? "Sí"
-                                    : "No"
-                            }
-                        </td>
-
-                        <td>
-                            ${usuario.fecha_creacion}
-                        </td>
-
-                    </tr>
-                `;
-
-        });
+    tabla.innerHTML = usuariosTemporales.map(u => `
+        <tr>
+            <td>${esc(u.id)}</td>
+            <td>${esc(u.username)}</td>
+            <td>${esc(u.email)}</td>
+            <td>${esc(u.nombre_completo)}</td>
+            <td>${esc(u.rol)}</td>
+            <td>${u.activo ? "Sí" : "No"}</td>
+            <td>${esc(u.fecha_creacion)}</td>
+        </tr>`).join("");
 
 }
 
-
-// ==========================================================================
-// CREAR NUEVO USUARIO
-// ==========================================================================
-//
-// API BACKEND:
-//
-// POST /api/usuarios
-//
-// Enviar:
-//
-// {
-//     username,
-//     email,
-//     password,
-//     nombre_completo,
-//     rol,
-//     activo
-// }
-//
-// IMPORTANTE:
-//
-// password_hash deberá generarlo el BACKEND.
-// ==========================================================================
-
-const formNuevoUsuario =
-    document.getElementById(
-        "formNuevoUsuario"
-    );
-
+const formNuevoUsuario = document.getElementById("formNuevoUsuario");
 
 if (formNuevoUsuario) {
 
-    formNuevoUsuario.addEventListener(
-        "submit",
-        async function (e) {
+    formNuevoUsuario.addEventListener("submit", function (e) {
 
-            e.preventDefault();
+        e.preventDefault();
 
+        const nuevo = {
+            id: usuariosTemporales.length + 1,
+            username: document.getElementById("nuevoUsername").value.trim(),
+            email: document.getElementById("nuevoEmail").value.trim(),
+            nombre_completo: document.getElementById("nuevoNombreCompleto").value.trim(),
+            rol: document.getElementById("nuevoRol").value,
+            activo: document.getElementById("nuevoActivo").value === "true",
+            fecha_creacion: new Date().toLocaleString()
+        };
 
-            const nuevoUsuario = {
+        usuariosTemporales.push(nuevo);
+        renderizarUsuarios();
 
-                username:
-                    document
-                        .getElementById(
-                            "nuevoUsername"
-                        )
-                        .value
-                        .trim(),
+        const mensaje = document.getElementById("msgNuevoUsuario");
+        mensaje.innerText =
+            "Usuario agregado en modo demostración (no existe API de usuarios).";
+        mensaje.style.color = "#16a34a";
 
-                email:
-                    document
-                        .getElementById(
-                            "nuevoEmail"
-                        )
-                        .value
-                        .trim(),
+        formNuevoUsuario.reset();
 
-                password:
-                    document
-                        .getElementById(
-                            "nuevoPassword"
-                        )
-                        .value,
-
-                nombre_completo:
-                    document
-                        .getElementById(
-                            "nuevoNombreCompleto"
-                        )
-                        .value
-                        .trim(),
-
-                rol:
-                    document
-                        .getElementById(
-                            "nuevoRol"
-                        )
-                        .value,
-
-                activo:
-                    document
-                        .getElementById(
-                            "nuevoActivo"
-                        )
-                        .value === "true"
-
-            };
-
-
-            const mensaje =
-                document.getElementById(
-                    "msgNuevoUsuario"
-                );
-
-
-            // ==========================================================
-            // API BACKEND
-            // ==========================================================
-            //
-            // FUTURO:
-            //
-            // const respuesta = await fetch(
-            //     `${API_BASE}/usuarios`,
-            //     {
-            //         method: "POST",
-            //         headers: {
-            //             "Content-Type": "application/json"
-            //         },
-            //         body: JSON.stringify(nuevoUsuario)
-            //     }
-            // );
-            //
-            // Después:
-            //
-            // GET /api/usuarios
-            //
-            // para volver a cargar la tabla.
-            // ==========================================================
-
-
-            // ==========================================================
-            // SIMULACIÓN TEMPORAL
-            // ==========================================================
-
-            usuariosTemporales.push({
-
-                id:
-                    usuariosTemporales.length + 1,
-
-                username:
-                    nuevoUsuario.username,
-
-                email:
-                    nuevoUsuario.email,
-
-                nombre_completo:
-                    nuevoUsuario.nombre_completo,
-
-                rol:
-                    nuevoUsuario.rol,
-
-                activo:
-                    nuevoUsuario.activo,
-
-                fecha_creacion:
-                    new Date()
-                        .toLocaleString()
-
-            });
-
-
-            renderizarUsuarios();
-
-
-            mensaje.innerText =
-                "Usuario agregado en modo demostración. Falta enviarlo a la API/BD.";
-
-
-            mensaje.style.color =
-                "#16a34a";
-
-
-            formNuevoUsuario.reset();
-
-        }
-    );
+    });
 
 }
 
 
 // ==========================================================================
-// MOSTRAR VEHÍCULOS REGISTRADOS
-// ==========================================================================
-//
-// OJO:
-//
-// Estos son TODOS los vehículos registrados en el sistema.
-//
-// NO significa que estén actualmente dentro del parqueo.
-//
-// API BACKEND:
-//
-// GET /api/vehiculos
-//
-// Deberá consultar la tabla:
-//
-// vehiculos
-//
+// VEHÍCULOS (los 6 tags fijos + el tag 3 manual)
 // ==========================================================================
 
 function renderizarVehiculos() {
 
-    const tabla =
-        document.getElementById(
-            "tablaVehiculosAdmin"
-        );
+    const tabla = document.getElementById("tablaVehiculosAdmin");
+    if (!tabla) return;
 
+    let placaManualGuardada = null;
 
-    if (!tabla) {
+    try {
+        placaManualGuardada = localStorage.getItem("parqueo_placa_manual");
+    } catch (e) { /* almacenamiento no disponible */ }
 
-        return;
+    tabla.innerHTML = TAGS_RFID.map(t => {
 
-    }
+        const slot = datosParqueo.espacios[`E${t.cajon}`];
 
+        let placa = t.placa;
 
-    tabla.innerHTML =
-        "";
+        if (t.tag === 3) {
+            placa = (slot && slot.placa) || placaManualGuardada || "(dinámica)";
+        }
 
+        // En parqueo = el cajón está ocupado en la BD (con o sin registro activo).
+        const adentro = slot && slot.estado !== "LIBRE";
+        const sinRegistro = adentro && slot.fantasma;
 
-    vehiculosTemporales
-        .forEach(vehiculo => {
+        const badge = !adentro
+            ? '<span class="badge pagado">Fuera</span>'
+            : sinRegistro
+                ? '<span class="badge pend">Ocupado sin registro</span>'
+                : '<span class="badge pend">En parqueo</span>';
 
-            tabla.innerHTML +=
-                `
-                    <tr>
+        return `
+            <tr>
+                <td>${t.tag}</td>
+                <td>${esc(placa)}</td>
+                <td>${esc(t.tipo)}</td>
+                <td>${esc(t.uid)}</td>
+                <td>E${t.cajon}</td>
+                <td>${badge}</td>
+            </tr>`;
 
-                        <td>
-                            ${vehiculo.id}
-                        </td>
-
-                        <td>
-                            ${vehiculo.placa}
-                        </td>
-
-                        <td>
-                            ${vehiculo.tipo_vehiculo}
-                        </td>
-
-                        <td>
-                            ${vehiculo.propietario_nombre}
-                        </td>
-
-                        <td>
-                            ${vehiculo.propietario_telefono}
-                        </td>
-
-                        <td>
-                            ${vehiculo.fecha_registro}
-                        </td>
-
-                    </tr>
-                `;
-
-        });
+    }).join("");
 
 }
 
-
-// ==========================================================================
-// REGISTRAR NUEVO VEHÍCULO
-// ==========================================================================
-//
-// ESTA PARTE CORRESPONDE CONCEPTUALMENTE A:
-//
-// REGISTRAR(tipo,PLACA)
-//
-// DEL MÓDULO DE AUTÓMATAS.
-//
-// Ejemplo:
-//
-// REGISTRAR(compacto,ABC123)
-//
-// API BACKEND:
-//
-// POST /api/vehiculos
-//
-// El Frontend enviará:
-//
-// {
-//     placa: "ABC123",
-//     tipo_vehiculo: "COMPACTO",
-//     propietario_nombre: "Juan Pérez",
-//     propietario_telefono: "55555555"
-// }
-//
-// Backend deberá:
-//
-// 1. Validar placa.
-// 2. Verificar que no esté registrada.
-// 3. Crear registro en tabla vehiculos.
-// 4. Generar fecha_registro.
-// 5. Devolver vehículo creado.
-//
-// ==========================================================================
-
-const formNuevoVehiculo =
-    document.getElementById(
-        "formNuevoVehiculo"
-    );
-
+// "Agregar Nuevo Vehículo" = comando REGISTRAR del autómata.
+const formNuevoVehiculo = document.getElementById("formNuevoVehiculo");
 
 if (formNuevoVehiculo) {
 
-    formNuevoVehiculo.addEventListener(
-        "submit",
-        async function (e) {
+    formNuevoVehiculo.addEventListener("submit", async function (e) {
 
-            e.preventDefault();
+        e.preventDefault();
 
+        const boton = formNuevoVehiculo.querySelector("button[type=submit]");
+        const mensaje = document.getElementById("msgNuevoVehiculo");
 
-            const placa =
-                document
-                    .getElementById(
-                        "nuevaPlacaVehiculo"
-                    )
-                    .value
-                    .trim()
-                    .toUpperCase();
+        const placa = document.getElementById("nuevaPlacaVehiculo").value.trim().toUpperCase();
+        const tipo = document.getElementById("nuevoTipoVehiculo").value.toLowerCase();
 
+        const pintar = (texto, ok) => {
+            mensaje.innerText = texto;
+            mensaje.style.color = ok ? "#16a34a" : "#dc2626";
+        };
 
-            const tipo =
-                document
-                    .getElementById(
-                        "nuevoTipoVehiculo"
-                    )
-                    .value;
-
-
-            const propietario =
-                document
-                    .getElementById(
-                        "nuevoPropietarioVehiculo"
-                    )
-                    .value
-                    .trim();
-
-
-            const telefono =
-                document
-                    .getElementById(
-                        "nuevoTelefonoVehiculo"
-                    )
-                    .value
-                    .trim();
-
-
-            const mensaje =
-                document.getElementById(
-                    "msgNuevoVehiculo"
-                );
-
-
-            // ==========================================================
-            // VALIDAR FORMATO DE PLACA
-            // ==========================================================
-            //
-            // El documento de Autómatas define:
-            //
-            // PLACA → [A-Z]{3}[0-9]{3}
-            //
-            // ==========================================================
-
-            const regexPlaca =
-                /^[A-Z]{3}[0-9]{3}$/;
-
-
-            if (!regexPlaca.test(placa)) {
-
-                mensaje.innerText =
-                    "La placa debe tener formato ABC123.";
-
-
-                mensaje.style.color =
-                    "#dc2626";
-
-
-                return;
-
-            }
-
-
-            // ==========================================================
-            // EVITAR PLACAS DUPLICADAS EN LA SIMULACIÓN
-            // ==========================================================
-
-            const yaExiste =
-                vehiculosTemporales.some(
-                    vehiculo =>
-                        vehiculo.placa === placa
-                );
-
-
-            if (yaExiste) {
-
-                mensaje.innerText =
-                    "Ese vehículo ya está registrado.";
-
-
-                mensaje.style.color =
-                    "#dc2626";
-
-
-                return;
-
-            }
-
-
-            const nuevoVehiculo = {
-
-                placa:
-                    placa,
-
-                tipo_vehiculo:
-                    tipo,
-
-                propietario_nombre:
-                    propietario,
-
-                propietario_telefono:
-                    telefono
-
-            };
-
-
-            // ==========================================================
-            // API BACKEND - REGISTRAR VEHÍCULO
-            // ==========================================================
-            //
-            // Cuando exista la API, reemplazar la simulación por:
-            //
-            /*
-            try {
-
-                const respuesta =
-                    await fetch(
-                        `${API_BASE}/vehiculos`,
-                        {
-                            method: "POST",
-
-                            headers: {
-                                "Content-Type":
-                                    "application/json"
-                            },
-
-                            body:
-                                JSON.stringify(
-                                    nuevoVehiculo
-                                )
-                        }
-                    );
-
-
-                if (!respuesta.ok) {
-
-                    throw new Error(
-                        "No se pudo registrar el vehículo."
-                    );
-
-                }
-
-
-                const vehiculoCreado =
-                    await respuesta.json();
-
-
-                mensaje.innerText =
-                    "Vehículo registrado correctamente.";
-
-
-                mensaje.style.color =
-                    "#16a34a";
-
-
-                formNuevoVehiculo.reset();
-
-
-                // Después consultar nuevamente:
-                //
-                // GET /api/vehiculos
-                //
-                // para actualizar la tabla.
-
-
-            } catch (error) {
-
-                mensaje.innerText =
-                    error.message;
-
-
-                mensaje.style.color =
-                    "#dc2626";
-
-            }
-
-
+        if (!REGEX_PLACA.test(placa)) {
+            pintar("La placa debe tener 5 a 10 letras o números (ej: 789XY).", false);
             return;
-            */
-            // ==========================================================
-
-
-            // ==========================================================
-            // SIMULACIÓN TEMPORAL SIN BACKEND
-            // ==========================================================
-
-            vehiculosTemporales.push({
-
-                id:
-                    vehiculosTemporales.length + 1,
-
-                placa:
-                    nuevoVehiculo.placa,
-
-                tipo_vehiculo:
-                    nuevoVehiculo.tipo_vehiculo,
-
-                propietario_nombre:
-                    nuevoVehiculo.propietario_nombre,
-
-                propietario_telefono:
-                    nuevoVehiculo.propietario_telefono,
-
-                fecha_registro:
-                    new Date()
-                        .toLocaleString()
-
-            });
-
-
-            renderizarVehiculos();
-
-
-            mensaje.innerText =
-                "Vehículo registrado en modo demostración. Falta enviarlo a la API/BD.";
-
-
-            mensaje.style.color =
-                "#16a34a";
-
-
-            formNuevoVehiculo.reset();
-
-        }
-    );
-
-}
-
-
-// ==========================================================================
-// CARGAR INFORMACIÓN DEL CLIENTE
-// ==========================================================================
-//
-// API BACKEND:
-//
-// GET /api/registros-acceso/activo?placa=ABC123
-//
-// ==========================================================================
-
-function cargarDatosCliente(
-    placaBuscada
-) {
-
-    cargarEstado();
-
-
-    let encontradoCodigo =
-        null;
-
-
-    for (
-        const codigo in datosParqueo.espacios
-    ) {
-
-        if (
-            datosParqueo
-                .espacios[codigo]
-                .placa === placaBuscada
-        ) {
-
-            encontradoCodigo =
-                codigo;
-
-            break;
-
         }
 
-    }
-
-
-    if (!encontradoCodigo) {
-
-        document.getElementById(
-            "lblPlaca"
-        ).innerText =
-            placaBuscada;
-
-
-        document.getElementById(
-            "lblEspacio"
-        ).innerText =
-            "Sin espacio asignado o vehículo ya retirado";
-
-
-        document.getElementById(
-            "lblEntrada"
-        ).innerText =
-            "---";
-
-
-        document.getElementById(
-            "lblTiempo"
-        ).innerText =
-            "---";
-
-
-        document.getElementById(
-            "lblEstadoPago"
-        ).innerHTML =
-            '<span class="badge pend">Sin Registro Activo</span>';
-
-
-        document.getElementById(
-            "btnPagar"
-        ).style.display =
-            "none";
-
-
-        return;
-
-    }
-
-
-    const datosEspacio =
-        datosParqueo
-            .espacios[encontradoCodigo];
-
-
-    document.getElementById(
-        "lblPlaca"
-    ).innerText =
-        placaBuscada;
-
-
-    document.getElementById(
-        "lblEspacio"
-    ).innerText =
-        `${encontradoCodigo} (${datosEspacio.categoria})`;
-
-
-    document.getElementById(
-        "lblEntrada"
-    ).innerText =
-        datosEspacio.horaEntrada
-        || "Reciente";
-
-
-    document.getElementById(
-        "lblTiempo"
-    ).innerText =
-        "En curso";
-
-
-    const lblPago =
-        document.getElementById(
-            "lblEstadoPago"
-        );
-
-
-    if (datosEspacio.pagado) {
-
-        lblPago.innerHTML =
-            '<span class="badge pagado">Pagado - Salida Autorizada</span>';
-
-
-        document.getElementById(
-            "btnPagar"
-        ).style.display =
-            "none";
-
-    }
-
-    else {
-
-        lblPago.innerHTML =
-            '<span class="badge pend">Pendiente de Pago</span>';
-
-
-        document.getElementById(
-            "btnPagar"
-        ).style.display =
-            "inline-block";
-
-    }
-
-}
-
-
-// ==========================================================================
-// REALIZAR PAGO
-// ==========================================================================
-//
-// API BACKEND:
-//
-// POST /api/pagos
-//
-// El Backend deberá:
-//
-// 1. Encontrar el registro activo.
-// 2. Registrar/actualizar el pago.
-// 3. Actualizar monto_total.
-// 4. Confirmar que la salida está autorizada.
-// 5. Actualizar la talanquera.
-//
-// La BD deberá ser quien determine el estado real.
-// ==========================================================================
-
-async function simularPago() {
-
-
-    if (!clienteActualPlaca) {
-
-        return;
-
-    }
-
-
-    cargarEstado();
-
-
-    let codigoEspacio =
-        null;
-
-
-    for (
-        const codigo in datosParqueo.espacios
-    ) {
-
-        if (
-            datosParqueo
-                .espacios[codigo]
-                .placa === clienteActualPlaca
-        ) {
-
-            codigoEspacio =
-                codigo;
-
-            break;
-
-        }
-
-    }
-
-
-    if (!codigoEspacio) {
-
-        alert(
-            "No se encontró un vehículo activo con esta placa."
-        );
-
-        return;
-
-    }
-
-
-    // ======================================================================
-    // API BACKEND - PAGO FUTURO
-    // ======================================================================
-    //
-    // Ejemplo:
-    //
-    /*
-    const respuesta =
-        await fetch(
-            `${API_BASE}/pagos`,
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:
-                    JSON.stringify({
-                        placa:
-                            clienteActualPlaca
-                    })
-            }
-        );
-
-
-    const resultado =
-        await respuesta.json();
-
-
-    if (resultado.salida_autorizada) {
-
-        // Backend confirmó el pago.
-        // Refrescar estado del parqueo.
-
-    }
-
-
-    return;
-    */
-    // ======================================================================
-
-
-    // ======================================================================
-    // SIMULACIÓN TEMPORAL DEL PAGO
-    // ======================================================================
-
-    const vehiculoPlaca =
-        datosParqueo
-            .espacios[codigoEspacio]
-            .placa;
-
-
-    const categoriaVehiculo =
-        datosParqueo
-            .espacios[codigoEspacio]
-            .categoria;
-
-
-    const horaEntradaVehiculo =
-        datosParqueo
-            .espacios[codigoEspacio]
-            .horaEntrada;
-
-
-    datosParqueo
-        .espacios[codigoEspacio]
-        .pagado =
-            true;
-
-
-    datosParqueo
-        .talanqueraSalida =
-            "ABIERTA";
-
-
-    guardarEstado();
-
-
-    const lblPago =
-        document.getElementById(
-            "lblEstadoPago"
-        );
-
-
-    const btnPagar =
-        document.getElementById(
-            "btnPagar"
-        );
-
-
-    const resSalida =
-        document.getElementById(
-            "lblResultadoSalida"
-        );
-
-
-    if (lblPago) {
-
-        lblPago.innerHTML =
-            '<span class="badge pagado">Pagado - Salida Autorizada</span>';
-
-    }
-
-
-    if (btnPagar) {
-
-        btnPagar.style.display =
-            "none";
-
-    }
-
-
-    if (resSalida) {
-
-        resSalida.innerHTML =
-            "¡Pago exitoso! Talanquera de salida abierta.";
-
-
-        resSalida.style.color =
-            "#22c55e";
-
-    }
-
-
-    // ======================================================================
-    // SIMULAR SALIDA
-    // ======================================================================
-    //
-    // API BACKEND:
-    //
-    // Esta acción corresponde conceptualmente a:
-    //
-    // AUTORIZAR_SALIDA(PLACA)
-    //
-    // y después:
-    //
-    // SALIDA(PLACA)
-    //
-    // El Backend deberá actualizar fecha_salida,
-    // registro_acceso, espacio y talanquera.
-    // ======================================================================
-
-    setTimeout(
-        () => {
-
-
-            cargarEstado();
-
-
-            if (
-                datosParqueo
-                    .espacios[codigoEspacio]
-                    .placa !== vehiculoPlaca
-            ) {
-
-                return;
-
-            }
-
-
-            datosParqueo
-                .historial
-                .unshift({
-
-                    id:
-                        Math.floor(
-                            Math.random() * 900
-                        ) + 100,
-
-                    placa:
-                        vehiculoPlaca,
-
-                    espacio:
-                        codigoEspacio,
-
-                    entrada:
-                        horaEntradaVehiculo
-                        || "Hace un momento",
-
-                    salida:
-                        new Date()
-                            .toLocaleTimeString(
-                                [],
-                                {
-                                    hour:
-                                        "2-digit",
-
-                                    minute:
-                                        "2-digit"
-                                }
-                            ),
-
-                    estado:
-                        "FINALIZADO",
-
-                    monto:
-                        "20.00"
-
-                });
-
-
-            datosParqueo
-                .espacios[codigoEspacio] =
-                {
-
-                    categoria:
-                        categoriaVehiculo,
-
-                    estado:
-                        "LIBRE",
-
-                    placa:
-                        null,
-
-                    horaEntrada:
-                        null,
-
-                    pagado:
-                        false
-
-                };
-
-
-            datosParqueo
-                .talanqueraSalida =
-                    "CERRADA";
-
-
-            guardarEstado();
-
-
-            if (resSalida) {
-
-                resSalida.innerHTML =
-                    "Salida completada. Espacio liberado.";
-
-
-                resSalida.style.color =
-                    "#2563eb";
-
-            }
-
-        },
-        5000
-    );
-
-}
-
-
-// ==========================================================================
-// SINCRONIZACIÓN ENTRE PESTAÑAS
-// ==========================================================================
-//
-// SOLO PARA LA DEMOSTRACIÓN ACTUAL.
-//
-// API BACKEND:
-//
-// Después puede reemplazarse por:
-//
-// GET /api/parqueo/estado
-//
-// o:
-//
-// WebSockets / Socket.IO
-//
-// ==========================================================================
-
-window.addEventListener(
-    "storage",
-    event => {
-
-
-        if (
-            event.key !== "parqueo_estado"
-            ||
-            !event.newValue
-        ) {
-
-            return;
-
-        }
-
+        boton.disabled = true;
+        pintar("Enviando al autómata...", true);
 
         try {
 
-            datosParqueo =
-                JSON.parse(
-                    event.newValue
+            if (tipo === "manual") {
+
+                const creado = await prepararVehiculoManual(placa);
+
+                pintar(
+                    creado
+                        ? `Vehículo manual ${placa} creado. Cajón 3 solicitado: pase el TAG 3 ` +
+                          "por el lector de entrada (o use Registro Manual de Ingreso)."
+                        : `La placa ${placa} ya estaba registrada. Si no tiene una solicitud ` +
+                          "pendiente o asignada de antes, el backend actual no permite volver " +
+                          "a ponerla en cola (use una placa nueva).",
+                    true
                 );
 
+            } else {
 
-            const vistaAdmin =
-                document.getElementById(
-                    "vista-admin"
-                );
-
-
-            const vistaCliente =
-                document.getElementById(
-                    "vista-cliente"
-                );
-
-
-            if (
-                vistaAdmin
-                &&
-                vistaAdmin.style.display !==
-                    "none"
-            ) {
-
-                actualizarInterfazAdmin();
+                await enviarComandoAutomata(`REGISTRAR(${placa}, ${tipo})`);
+                pintar(`Vehículo ${placa} registrado correctamente.`, true);
 
             }
 
-
-            if (
-                vistaCliente
-                &&
-                vistaCliente.style.display !==
-                    "none"
-                &&
-                clienteActualPlaca
-            ) {
-
-                cargarDatosCliente(
-                    clienteActualPlaca
-                );
-
-            }
-
+            formNuevoVehiculo.reset();
+            renderizarVehiculos();
 
         } catch (error) {
 
-            console.error(
-                "Error sincronizando el parqueo:",
-                error
-            );
+            pintar(error.message, false);
 
+        } finally {
+
+            boton.disabled = false;
+
+        }
+
+    });
+
+}
+
+
+// ==========================================================================
+// PORTAL DEL CLIENTE
+// ==========================================================================
+
+function ponerTexto(id, texto) {
+    const el = document.getElementById(id);
+    if (el) el.innerText = texto;
+}
+
+async function cargarDatosCliente(placaBuscada) {
+
+    const lblPago = document.getElementById("lblEstadoPago");
+    const btnPagar = document.getElementById("btnPagar");
+    const resSalida = document.getElementById("lblResultadoSalida");
+
+    ponerTexto("lblPlaca", placaBuscada);
+
+    let ocupados;
+
+    try {
+
+        ocupados = await consultarOcupados();
+        mostrarErrorConexion(null);
+
+    } catch (error) {
+
+        mostrarErrorConexion(error.message);
+        return;
+
+    }
+
+    limpiarPagosObsoletos(ocupados);
+
+    const o = ocupados.find(x => String(x.placa).toUpperCase() === placaBuscada);
+
+    // ----------------------------------------------------------------------
+    // NO ESTÁ EN EL PARQUEO
+    // ----------------------------------------------------------------------
+
+    if (!o) {
+
+        const salioPagado = clienteEstuvoDentro;
+
+        clienteOcupadoActual = null;
+        clienteEstuvoDentro = false;
+
+        ponerTexto(
+            "lblEspacio",
+            salioPagado ? "Vehículo ya retirado" : "El vehículo no se encuentra en el parqueo"
+        );
+        ponerTexto("lblEntrada", "---");
+        ponerTexto("lblTiempo", "---");
+
+        lblPago.innerHTML = salioPagado
+            ? '<span class="badge pagado">Salida completada</span>'
+            : '<span class="badge pend">No se encuentra en parqueo</span>';
+
+        btnPagar.style.display = "none";
+
+        if (salioPagado && resSalida) {
+            resSalida.innerText = "Salida completada. ¡Gracias por su visita!";
+            resSalida.style.color = "#2563eb";
+        }
+
+        return;
+
+    }
+
+    // ----------------------------------------------------------------------
+    // SÍ ESTÁ EN EL PARQUEO
+    // ----------------------------------------------------------------------
+
+    clienteOcupadoActual = o;
+    clienteEstuvoDentro = true;
+
+    const n = numeroCajon(o.espacio ?? o.codigo ?? o.cajon);
+    const tag = TAGS_RFID.find(t => t.cajon === n);
+
+    let minutos = o.minutos_transcurridos;
+
+    if ((minutos === undefined || minutos === null) && o.fecha_entrada) {
+        minutos = (Date.now() - new Date(o.fecha_entrada).getTime()) / 60000;
+    }
+
+    let tiempo = formatearMinutos(minutos);
+
+    if (o.monto_estimado !== undefined && o.monto_estimado !== null) {
+        tiempo += ` · monto estimado $${Number(o.monto_estimado).toFixed(2)}`;
+    }
+
+    ponerTexto(
+        "lblEspacio",
+        `E${n ?? "?"} (${tag ? tag.tipo : String(o.tipo ?? "").toUpperCase()})`
+    );
+    ponerTexto("lblEntrada", formatearFecha(o.fecha_entrada));
+    ponerTexto("lblTiempo", tiempo);
+
+    if (estaPagado(o)) {
+
+        lblPago.innerHTML =
+            '<span class="badge pagado">Pagado - Salida Autorizada</span>';
+
+        btnPagar.style.display = "none";
+
+        if (resSalida && !resSalida.innerText) {
+            resSalida.innerText = "Pago registrado. Pase su TAG por el lector de salida.";
+            resSalida.style.color = "#22c55e";
+        }
+
+    } else {
+
+        lblPago.innerHTML = '<span class="badge pend">Pendiente de Pago</span>';
+        btnPagar.style.display = "inline-block";
+        btnPagar.disabled = false;
+
+    }
+
+}
+
+
+// ==========================================================================
+// REALIZAR PAGO  ->  POST /api/pago/confirmar  { placa }
+// ==========================================================================
+// El backend NO cobra dinero: solo registra la autorización de salida.
+// Después el cliente pasa su TAG por el lector de salida (ESP32).
+
+async function realizarPago() {
+
+    if (!clienteActualPlaca) return;
+
+    const btnPagar = document.getElementById("btnPagar");
+    const resSalida = document.getElementById("lblResultadoSalida");
+
+    if (!clienteOcupadoActual) {
+        alert("El vehículo no se encuentra en el parqueo.");
+        return;
+    }
+
+    btnPagar.disabled = true;
+
+    try {
+
+        const r = await apiFetch("/pago/confirmar", {
+            method: "POST",
+            body: { placa: clienteActualPlaca }
+        });
+
+        const pagos = leerPagos();
+        pagos[clienteActualPlaca] = llaveEstancia(clienteOcupadoActual);
+        guardarPagos(pagos);
+
+        if (resSalida) {
+            resSalida.innerText =
+                (r && r.mensaje ? r.mensaje + " " : "Pago registrado. ") +
+                "Pase su TAG por el lector de salida.";
+            resSalida.style.color = "#22c55e";
+        }
+
+        await cargarDatosCliente(clienteActualPlaca);
+
+    } catch (error) {
+
+        btnPagar.disabled = false;
+
+        if (resSalida) {
+            resSalida.innerText = `No se pudo registrar el pago: ${error.message}`;
+            resSalida.style.color = "#dc2626";
         }
 
     }
-);
 
-
-// ==========================================================================
-// AUTO REFRESCO DEL ADMIN
-// ==========================================================================
-//
-// API BACKEND:
-//
-// Aquí después puede hacerse:
-//
-// GET /api/parqueo/estado
-//
-// cada cierto tiempo.
-//
-// ==========================================================================
-
-setInterval(
-    () => {
-
-
-        const vistaAdmin =
-            document.getElementById(
-                "vista-admin"
-            );
-
-
-        if (
-            vistaAdmin
-            &&
-            vistaAdmin.style.display !==
-                "none"
-        ) {
-
-            cargarEstado();
-
-            actualizarInterfazAdmin();
-
-        }
-
-    },
-    1000
-);
+}
