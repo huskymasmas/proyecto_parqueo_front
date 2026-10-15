@@ -165,7 +165,7 @@
                         <input
                             type="text"
                             id="inputUserAdmin"
-                            placeholder="admin u operador1"
+                            placeholder="Admin"
                             required
                         >
 
@@ -188,7 +188,13 @@
                     </div>
 
 
+                    <p id="msgLoginAdmin"
+                       class="msg-alerta"
+                       role="alert"
+                       style="color:#dc2626;min-height:1.2em;"></p>
+
                     <button type="submit"
+                            id="btnLoginAdmin"
                             class="btn-primary">
 
                         Entrar al Panel
@@ -380,7 +386,10 @@
         // INGRESAR COMO PERSONAL
         // ============================================================
 
-        function ingresarComoAdmin(e) {
+        // API: POST /api/login  { username, password }
+        // Valida contra la tabla usuariosnuevo (hash PBKDF2 en el backend).
+
+        async function ingresarComoAdmin(e) {
 
             e.preventDefault();
 
@@ -390,22 +399,56 @@
                 .value
                 .trim();
 
-
             const password = document
                 .getElementById('inputPassAdmin')
                 .value;
 
-            sessionStorage.setItem(
-                'usuarioLogueado',
-                JSON.stringify({
-                    tipo: 'ADMIN',
-                    username: user
-                })
-            );
+            const msg = document.getElementById('msgLoginAdmin');
+            const boton = document.getElementById('btnLoginAdmin');
 
 
-            window.location.href =
-                'index.html';
+            msg.innerText = '';
+            boton.disabled = true;
+            boton.innerText = 'Verificando...';
+
+
+            try {
+
+                const r = await apiFetch('/login', {
+                    method: 'POST',
+                    body: { username: user, password: password }
+                });
+
+
+                sessionStorage.setItem(
+                    'usuarioLogueado',
+                    JSON.stringify({
+                        tipo: 'ADMIN',
+                        username: r.username || user,
+                        nombre_completo: r.nombre_completo || '',
+                        rol: r.rol || 'ADMIN',
+                        usuario_id: r.usuario_id
+                    })
+                );
+
+
+                window.location.href =
+                    'index.html';
+
+            }
+
+            catch (error) {
+
+                msg.innerText = error.message;
+
+            }
+
+            finally {
+
+                boton.disabled = false;
+                boton.innerText = 'Entrar al Panel';
+
+            }
 
         }
 

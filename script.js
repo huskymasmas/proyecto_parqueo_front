@@ -16,11 +16,12 @@
 //   POST /api/rfid/comando        -> ASIGNAR(...)/SALIDA(...) desde "Registro
 //                                     Manual de Ingreso" y "Salida Manual"
 //   POST /api/pago/confirmar      -> botón "Realizar Pago" del cliente
+//   GET  /api/alarmas             -> pestaña Centro de Alarmas
+//   POST /api/alarma/silenciar    -> botón "Callar alarma"  { placa }
+//   POST /api/login               -> (en Login.html) acceso del personal
 //
 // LO QUE SIGUE SIN API (queda local / demostración)
-//   - Alarmas (no hay endpoint de lectura)
-//   - Pestaña Usuarios (no hay tabla de usuarios en la BD nueva)
-//   - El login de personal (solo guarda el nombre en sessionStorage)
+//   - Pestaña Usuarios (el API solo tiene login; no lista ni crea usuarios)
 // ==========================================================================
 
 
@@ -49,11 +50,9 @@ function crearEstadoVacio() {
     }
 
     return {
-        talanqueraEntrada: "CERRADA",
-        talanqueraSalida: "CERRADA",
         espacios: espacios,
         historial: [],
-        alarmas: []        // sin endpoint de lectura: se deja como estaba
+        alarmas: []        // viene de GET /api/alarmas
     };
 
 }
@@ -64,9 +63,6 @@ let clienteActualPlaca = null;
 let clienteOcupadoActual = null;     // registro activo del cliente (o null)
 let clienteEstuvoDentro = false;
 let refrescando = false;
-let placasPrevias = null;            // para detectar entradas/salidas reales
-let temporizadorEntrada = null;
-let temporizadorSalida = null;
 
 const REGEX_PLACA = /^[A-Z0-9]{5,10}$/;
 
@@ -322,10 +318,11 @@ async function refrescarAdmin() {
 
     try {
 
-        const [rEsp, rOcu, rHist] = await Promise.allSettled([
+        const [rEsp, rOcu, rHist, rAlr] = await Promise.allSettled([
             apiFetch("/espacios"),
             consultarOcupados(),
-            apiFetch("/historial?limit=50")
+            apiFetch("/historial?limit=50"),
+            apiFetch("/alarmas")
         ]);
 
         // Si fallan los dos datos principales, se avisa y se deja lo último visto.
@@ -337,8 +334,6 @@ async function refrescarAdmin() {
         mostrarErrorConexion(null);
 
         const nuevo = crearEstadoVacio();
-        nuevo.talanqueraEntrada = datosParqueo.talanqueraEntrada;
-        nuevo.talanqueraSalida = datosParqueo.talanqueraSalida;
         nuevo.alarmas = datosParqueo.alarmas;
         nuevo.historial = datosParqueo.historial;
 
@@ -388,8 +383,6 @@ async function refrescarAdmin() {
 
             });
 
-            detectarMovimientos(ocupadosActuales);
-
             // Cajón que la tabla `espacios` marca OCUPADO pero que no tiene
             // ningún registro activo (ni placa): quedó "pegado" en la BD.
             for (const codigo in nuevo.espacios) {
@@ -414,6 +407,11 @@ async function refrescarAdmin() {
 
         }
 
+        // ---- Alarmas ----
+        if (rAlr.status === "fulfilled") {
+            nuevo.alarmas = comoLista(rAlr.value);
+        }
+
         datosParqueo = nuevo;
         actualizarInterfazAdmin();
 
@@ -434,67 +432,11 @@ async function refrescarAdmin() {
 }
 
 
-// Compara con la consulta anterior: si entró o salió alguien (por RFID real)
-// se enciende el indicador de la talanquera unos segundos.
-function detectarMovimientos(ocupados) {
-
-    const actuales = new Set(ocupados.map(o => String(o.placa).toUpperCase()));
-
-    if (placasPrevias) {
-
-        const entro = [...actuales].some(p => !placasPrevias.has(p));
-        const salio = [...placasPrevias].some(p => !actuales.has(p));
-
-        if (entro) abrirTalanquera("Entrada");
-        if (salio) abrirTalanquera("Salida");
-
-    }
-
-    placasPrevias = actuales;
-
-}
-
-function abrirTalanquera(cual) {
-
-    const clave = `talanquera${cual}`;
-    datosParqueo[clave] = "ABIERTA";
-
-    const tiempo = setTimeout(() => {
-        datosParqueo[clave] = "CERRADA";
-        actualizarInterfazAdmin();
-    }, 4000);
-
-    if (cual === "Entrada") {
-        clearTimeout(temporizadorEntrada);
-        temporizadorEntrada = tiempo;
-    } else {
-        clearTimeout(temporizadorSalida);
-        temporizadorSalida = tiempo;
-    }
-
-}
-
-
 // ==========================================================================
 // ACTUALIZAR INTERFAZ ADMIN
 // ==========================================================================
 
 function actualizarInterfazAdmin() {
-
-    // ---------------- Talanqueras ----------------
-
-    [["estado-t-entrada", datosParqueo.talanqueraEntrada],
-     ["estado-t-salida", datosParqueo.talanqueraSalida]]
-        .forEach(([id, valor]) => {
-
-            const el = document.getElementById(id);
-
-            if (el) {
-                el.innerText = valor;
-                el.className = `badge ${valor === "ABIERTA" ? "abierta" : "cerrada"}`;
-            }
-
-        });
 
     // ---------------- Posiciones de los cuadritos del mapa ----------------
     // ESTO ES ÚNICAMENTE VISUAL. top mayor = baja, left mayor = derecha.
@@ -665,41 +607,47 @@ function actualizarInterfazAdmin() {
 
     }
 
-    // ---------------- Alarmas (sin API: se deja como estaba) ----------------
+    // ---------------- Alarmas (vienen de GET /api/alarmas) ----------------
 
     const tablaAlarmas = document.getElementById("tablaAlarmasBD");
 
     if (tablaAlarmas) {
 
-        let noAtendidas = 0;
-        let filas = "";
+        const activas = datosParqueo.alarmas.filter(a => a.estado === "ACTIVA");
+        const silenciadas = datosParqueo.alarmas
+            .filter(a => a.estado !== "ACTIVA")
+            .slice(0, 20);                      // solo las 20 más recientes
 
-        datosParqueo.alarmas.forEach(a => {
+        const fila = a => {
 
-            if (a.atendida) return;
+            const activa = a.estado === "ACTIVA";
 
-            noAtendidas++;
-
-            filas += `
+            return `
                 <tr>
-                    <td>${esc(a.tipo)}</td>
-                    <td><span class="badge pend">${esc(a.nivel)}</span></td>
-                    <td>${esc(a.espacio)}</td>
-                    <td>${esc(a.descripcion)}</td>
-                    <td>
-                        <button class="btn-secondary"
-                                onclick="atenderAlarma(${Number(a.id)})">
-                            Resolver
-                        </button>
+                    <td>${esc(a.placa)}</td>
+                    <td>E${esc(a.cajon)}</td>
+                    <td>${esc(String(a.motivo ?? "").replace(/_/g, " "))}</td>
+                    <td>${esc(formatearFecha(a.fecha_activacion))}</td>
+                    <td><span class="badge ${activa ? "pend" : "pagado"}">${esc(a.estado)}</span></td>
+                    <td>${activa
+                        ? `<button class="btn-secondary"
+                                   onclick="silenciarAlarma('${esc(a.placa)}', this)">
+                               Callar alarma
+                           </button>`
+                        : "---"}
                     </td>
                 </tr>`;
 
-        });
+        };
 
-        tablaAlarmas.innerHTML = filas;
+        const todas = [...activas, ...silenciadas];
+
+        tablaAlarmas.innerHTML = todas.length
+            ? todas.map(fila).join("")
+            : '<tr><td colspan="6">No hay alarmas registradas.</td></tr>';
 
         const badgeAlarmas = document.getElementById("badge-count-alarmas");
-        if (badgeAlarmas) badgeAlarmas.innerText = noAtendidas;
+        if (badgeAlarmas) badgeAlarmas.innerText = activas.length;
 
     }
 
@@ -831,8 +779,6 @@ if (formAdminRegistro) {
 
             const r = await enviarComandoRfid(comando);
 
-            if (r.abrir_barrera) abrirTalanquera("Entrada");
-
             await refrescarAdmin();
 
             alert(
@@ -896,8 +842,6 @@ async function darSalidaManual(placa) {
 
     const r = await enviarComandoRfid(`SALIDA(${tag ? placa : "MANUAL"})`);
 
-    if (r.abrir_barrera) abrirTalanquera("Salida");
-
     await refrescarAdmin();
 
     return r;
@@ -944,16 +888,33 @@ if (formAdminSalida) {
 
 
 // ==========================================================================
-// ATENDER ALARMA (local: no hay endpoint)
+// CALLAR ALARMA  ->  POST /api/alarma/silenciar  { placa }
 // ==========================================================================
+// Al silenciar, el ESP32 lo detecta por su polling a /api/alarma/estado
+// y apaga el buzzer.
 
-function atenderAlarma(id) {
+async function silenciarAlarma(placa, boton) {
 
-    const alarma = datosParqueo.alarmas.find(x => x.id === id);
+    if (boton) boton.disabled = true;
 
-    if (alarma) {
-        alarma.atendida = true;
-        actualizarInterfazAdmin();
+    try {
+
+        await apiFetch("/alarma/silenciar", {
+            method: "POST",
+            body: { placa: String(placa).toUpperCase() }
+        });
+
+        await refrescarAdmin();
+
+    } catch (error) {
+
+        if (boton) boton.disabled = false;
+
+        alert(`No se pudo callar la alarma: ${error.message}`);
+
+        // Si ya estaba silenciada (404), se refresca para reflejar el estado real.
+        if (error.status === 404) refrescarAdmin();
+
     }
 
 }
